@@ -526,7 +526,7 @@ class VideoStore:
         keys = ("job_id", "project_id", "task_id", "status", "credit_status", "credit_cost", "credits_per_second",
                 "resolution", "duration", "created_at", "started_at", "finished_at", "updated_at", "error",
                 "storyboard_id", "storyboard_version", "storyboard_shot_id", "main_project_id", "subproject_id",
-                "output_task_id", "output_artifact_id", "video_version")
+                "output_task_id", "output_artifact_id", "video_version", "cancelled_before_claim")
         return {**{key: job[key] for key in keys if key in job}, "recovery": VideoStore._recovery(job, job["task_id"])}
 
     @staticmethod
@@ -665,6 +665,60 @@ class VideoStore:
 
     def _beat(self, worker_id, backend="h3"):
         self._write(self._path("workers", _validate_id(worker_id) + ".json"), {"worker_id": worker_id, "backend": backend, "time": time.time()})
+
+    def cancel_queued(self, account_id, workspace_id, pid, sid, job_id):
+        """Claim and cancellation share the same lock; never cancel claimed work."""
+        with self.lock():
+            self._project(account_id, workspace_id, pid)
+            job = self._read(self._job_path(job_id))
+            if (job["project_id"], job["task_id"]) != (pid, sid):
+                raise FileNotFoundError("视频作业不存在")
+            if job.get("cancelled_before_claim"):
+                self._save_job(job)
+                return self.public_job(job)
+            if job["status"] != "queued" or job.get("claim_id"):
+                raise ConflictError("执行器已领取或任务已结束，不能取消；请刷新状态")
+            job.update(status="failed", cancelled_before_claim=True, error="用户取消尚未领取的视频", finished_at=_now())
+            self._save_job(job)
+            return self.public_job(job)
+
+    def confirm_video_stopped(self, account_id, job_id, *, confirmed, evidence):
+        with self.identity.connect() as db:
+            row = db.execute("SELECT is_admin,status FROM accounts WHERE account_id=?", (_validate_id(account_id),)).fetchone()
+        if not row or not row["is_admin"] or row["status"] != "active":
+            raise PermissionError("只有管理员可以核对视频执行结果")
+        if confirmed is not True:
+            raise ValueError("必须明确确认原执行已停止且没有可交付结果")
+        _string(evidence, "核对依据", 2000)
+        with self.lock():
+            job = self._read(self._job_path(job_id))
+            if job.get("stopped_by"):
+                self._save_job(job)
+                return self.public_job(job)
+            if job["status"] != "uncertain" or job.get("output") or self._path("outputs", job_id + ".mp4").is_file():
+                raise ConflictError("仅无已上传结果的未知任务可确认停止；已有输出请先完成归档核对")
+            job.update(status="failed", stopped_by=account_id, stop_evidence=evidence,
+                       error="管理员已核实原执行停止且无结果，冻结积分已释放", finished_at=_now())
+            self._save_job(job)
+            return self.public_job(job)
+
+    def uncertain_jobs(self, account_id):
+        with self.identity.connect() as db:
+            row = db.execute("SELECT is_admin,status FROM accounts WHERE account_id=?", (_validate_id(account_id),)).fetchone()
+        if not row or not row["is_admin"] or row["status"] != "active":
+            raise PermissionError("只有管理员可以查看待核对队列")
+        with self.lock():
+            # Inspect snapshots without settling the outbox or changing any job.
+            jobs = {j["job_id"]: j for j in self.identity.pending_jobs() if j.get("kind") == "video"}
+            for path in self._path("jobs").glob("*.json"):
+                if not path.name.startswith(".tmp-"):
+                    job = self._read(path)
+                    jobs[job["job_id"]] = job
+            return [{**self.public_job(j), "worker_id": j.get("worker_id"), "prompt_id": j.get("prompt_id"),
+                     "attempt_id": j.get("attempt_id"), "backend": j.get("backend", "h3"),
+                     "stage": j.get("stage", "generation"),
+                     "has_output": bool(j.get("output")) or self._path("outputs", j["job_id"] + ".mp4").is_file()}
+                    for j in sorted(jobs.values(), key=lambda j: (j["created_at"], j["job_id"])) if j["status"] == "uncertain"]
 
     def _manifest(self, job):
         project = self._project(job["account_id"], job["workspace_id"], job["project_id"])

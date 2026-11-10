@@ -128,13 +128,14 @@ class AssetStoryboardBrowserTests(unittest.TestCase):
         return self.get("/api/storyboards/" + task["storyboard_id"])
 
     def open_stage(self, stage):
-        fragment = "pipelineVideos" if stage == "video" else "pipelineScripts"
+        fragment = "pipelineStoryboards" if stage == "video" else "pipelineScripts"
         self.page.goto(self.origin + f"/video?project={self.pid}#{fragment}", wait_until="networkidle")
         self.page.wait_for_function("(id) => window.IWVideo?.snapshot().project?.project_id === id", arg=self.pid)
-        self.page.locator(f'[data-pipeline-step="{stage}"]').click()
-        self.page.locator(f'[data-pipeline-tab="{stage}"][data-mode="generate"]').click()
+        self.page.locator(f'[data-pipeline-step="{"storyboard" if stage == "video" else stage}"]').click()
+        if stage != "video":
+            self.page.locator(f'[data-pipeline-tab="{stage}"][data-mode="generate"]').click()
         if stage == "video":
-            self.board_panel = self.page.locator("#pipelineVideos > .pipeline-stage-body .storyboard-panel").filter(
+            self.board_panel = self.page.locator("#pipelineStoryboardBody .storyboard-panel").filter(
                 has=self.page.get_by_role("heading", name="AI 分镜规划与审核", exact=True))
             expect(self.board_panel.get_by_role("button", name="保存选中镜头", exact=True)).to_be_visible()
 
@@ -176,7 +177,7 @@ class AssetStoryboardBrowserTests(unittest.TestCase):
         draft_text = "尚未保存的画面描述：灯塔旁海浪翻涌。"
         field.fill(draft_text)
         started = time.perf_counter()
-        self.assertTrue(self.event(colors=("red",), selector='#pipelineVideos textarea[name="visual_description"]'))
+        self.assertTrue(self.event(colors=("red",), selector='#pipelineStoryboards textarea[name="visual_description"]'))
         self.idle()
         expect(self.page.locator("dialog.asset-choice-dialog[open]")).to_have_count(0)
         uploaded = self.assets()
@@ -260,7 +261,7 @@ class AssetStoryboardBrowserTests(unittest.TestCase):
                          ("mock", source["version_id"], self.pid))
         self.assertTrue(request["confirmed"])
         task = submitted.value.json()
-        expect(panel.get_by_role("link", name="在视频工作台查看此分镜", exact=True)).to_be_visible(timeout=15000)
+        expect(self.page.get_by_role("link", name="在视频工作台查看此分镜", exact=True)).to_be_visible(timeout=15000)
         finished = self.get("/api/storyboards/tasks/" + task["task_id"])
         self.assertEqual(finished["status"], "completed", finished)
         board = self.get("/api/storyboards/" + finished["storyboard_id"])
@@ -270,6 +271,60 @@ class AssetStoryboardBrowserTests(unittest.TestCase):
         self.assertEqual(self.mock_planner.generate.call_count, 1)
         self.assertEqual(self.app.identity.wallet(self.aid)["used_credit"], 0)
         self.record("script_menu_quote_to_mock_storyboard", started)
+
+    def test_approved_shot_direct_generation_uses_confirmation_then_queue_cancellation(self):
+        with self.app.identity.connect() as db:
+            admin = db.execute("SELECT account_id FROM accounts WHERE is_admin=1").fetchone()["account_id"]
+        self.app.video_store.set_config(admin, {"720p": 2, "1080p": 4})
+        board = self.plan()
+        board = self.post(f"/api/storyboards/{board['storyboard_id']}/edit", json={
+            "request_id": uuid4().hex, "expected_version": board["version"],
+            "operation": "approve", "reason": "Mock browser approval"})
+        self.open_stage("video")
+        run = self.board_panel.get_by_role("button", name="生成此镜头视频", exact=True).first
+        expect(run).to_be_visible()
+        self.page.once("dialog", lambda d: d.dismiss())
+        run.click()
+        expect(run).to_be_enabled()
+        self.assertEqual(self.app.video_store._jobs(), [])
+        self.page.once("dialog", lambda d: d.accept())
+        run.click()
+        expect(self.page.locator("#pipelineVideos")).to_be_visible()
+        cancel = self.page.get_by_role("button", name="取消排队 · 释放冻结积分", exact=True)
+        expect(cancel).to_be_visible()
+        self.assertGreater(self.app.identity.wallet(self.aid)["frozen_credit"], 0)
+        self.assertEqual(len(self.app.video_store._jobs()), 1)
+        cancel.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("冻结积分已释放")
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 0)
+        self.assertEqual(self.app.identity.wallet(self.aid)["used_credit"], 0)
+
+    def test_planning_progress_is_visible_when_options_closed_and_blocks_repeat(self):
+        from threading import Event
+        release = Event()
+        self.addCleanup(release.set)
+        original = self.mock_planner.generate
+        def delayed(*args, **kwargs):
+            release.wait(timeout=20)
+            return original(*args, **kwargs)
+        self.app.storyboard_service.planner.mock.generate = Mock(side_effect=delayed)
+        source = self.script()
+        self.open_stage("script")
+        panel = self.page.locator("#pipelineScriptForm .storyboard-panel")
+        panel.locator("summary").click()
+        panel.locator('select[name="mode"]').select_option("mock")
+        self.script_card(source).get_by_role("button", name="为此版本规划分镜", exact=True).click()
+        panel.get_by_role("button", name="确认此版本分镜报价并提交", exact=True).click()
+        progress = self.page.locator("#pipelineScriptForm .storyboard-progress")
+        expect(progress).to_contain_text("请勿重复提交")
+        panel.locator("summary").click()
+        expect(progress).to_be_visible()
+        expect(progress).to_contain_text("已用")
+        expect(self.script_card(source).get_by_role("button", name="为此版本规划分镜", exact=True)).to_be_disabled()
+        release.set()
+        expect(progress).to_contain_text("分镜已完成", timeout=15000)
+        expect(progress.get_by_role("link", name="在视频工作台查看此分镜", exact=True)).to_be_visible()
+        self.assertEqual(self.app.identity.wallet(self.aid)["used_credit"], 0)
 
     def test_script_more_save_template_opens_correct_version_and_saves_private_template(self):
         source = self.script()

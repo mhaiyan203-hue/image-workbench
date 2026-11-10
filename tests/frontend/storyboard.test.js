@@ -74,7 +74,7 @@ function shot(id, overrides = {}) {
 
 function harness({ boards, assets = [], taskResults = {}, makeReplanTask = null }) {
   const root = new MiniNode('main'); root.isConnected = true;
-  const ids = ['videoShotForm','videoShotName','videoShotPrompt','videoDuration','videoRatio','videoMode','videoReferenceChoices','videoResolution'];
+  const ids = ['pipelineStoryboardBody','videoShotForm','videoShotName','videoShotPrompt','videoDuration','videoRatio','videoMode','videoReferenceChoices','videoResolution'];
   const elements = new Map(ids.map(id => [id, new MiniNode(id === 'videoShotForm' ? 'form' : id === 'videoShotPrompt' ? 'textarea' : id === 'videoReferenceChoices' ? 'div' : id === 'videoDuration' ? 'input' : id === 'videoRatio' || id === 'videoMode' || id === 'videoResolution' ? 'select' : 'input')]));
   for (const [id, element] of elements) { element.id = id; root.append(element); }
   elements.get('videoDuration').value = '5'; elements.get('videoRatio').value = 'landscape'; elements.get('videoMode').value = 'T2V'; elements.get('videoResolution').value = '720p';
@@ -120,7 +120,7 @@ function harness({ boards, assets = [], taskResults = {}, makeReplanTask = null 
     if (method === 'POST' && url.endsWith('/video-draft')) return {};
     throw new Error(`Unexpected API request ${method} ${url}`);
   };
-  const context = vm.createContext({ window: { IWVideo: host }, document, sessionStorage: {
+  const context = vm.createContext({ location:{hash:''}, window: { IWVideo: host }, document, sessionStorage: {
     values: new Map(), getItem(key) { return this.values.get(key) ?? null; }, setItem(key, value) { this.values.set(key, String(value)); }, removeItem(key) { this.values.delete(key); },
   }, crypto: { randomUUID: () => `${Math.random().toString(16).slice(2).padEnd(32, '0')}` }, Event: class { constructor(type) { this.type = type; } },
   setTimeout: callback => { (contextTimers.push(callback)); return contextTimers.length; }, clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {}, });

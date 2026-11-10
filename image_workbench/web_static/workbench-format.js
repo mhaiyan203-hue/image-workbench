@@ -31,13 +31,13 @@
         : null;
       return `${statusText(detail.status)} · 已运行 ${formatSeconds(elapsed)}`;
     }
-    if (detail.status === 'uncertain') return '执行状态待确认 · 最终耗时暂不可用';
+    if (detail.status === 'uncertain') return '执行结果未知 · 需核对 · 最终耗时暂不可用';
     const seconds = executionDuration(detail);
     if (seconds !== null && seconds !== undefined) return `${detail.status === 'failed' ? '执行失败' : '本次执行完成'} · 本次执行耗时 ${formatSeconds(seconds)}`;
     return detail.status === 'failed' ? '执行失败 · 耗时未记录' : '';
   }
   function statusText(status, label) {
-    const names = { draft: '待开始', queued: '等待执行', generating: '生成中', checking: '检查产物', awaiting_review: '等待审核', approved: '已通过', failed: '执行失败', uncertain: '状态待确认', running: '执行中', archiving: '归档中', succeeded: '已完成', archive_failed: '归档失败' };
+    const names = { draft: '待开始', queued: '等待执行', generating: '生成中', checking: '检查产物', awaiting_review: '等待审核', approved: '已通过', failed: '执行失败', uncertain: '结果未知 · 需核对', running: '执行中', archiving: '归档中', succeeded: '已完成', archive_failed: '归档失败' };
     if (label && !/^[a-z][a-z0-9_-]*$/i.test(label)) return label;
     if (names[status]) return names[status];
     return '状态未知';

@@ -5,9 +5,9 @@
   const p = { id: null, data: null, config: null, quote: null, imageRequest: uuid(), scriptRequest: uuid(), quoteBody: '', quoteSequence: 0, loading: false, imageRefs: [], runRequests: new Map(), revision: 0 };
   const pipelineContext = () => ({...captureContext(), id: p.id, pipelineRevision: p.revision});
   const samePipeline = context => isCurrent(context) && context.id === p.id && context.pipelineRevision === p.revision;
-  const labels = { queued: '排队中', running: '生成中', archiving: '保存中', completed: '已完成', failed: '生成失败', uncertain: '状态待确认' };
-  const stages = ['image', 'script', 'video'];
-  const panels = ['pipelineImages', 'pipelineScripts', 'pipelineVideos'];
+  const labels = { queued: '排队中', running: '生成中', archiving: '保存中', completed: '已完成', failed: '生成失败', uncertain: '结果未知 · 需核对' };
+  const stages = ['image', 'script', 'storyboard', 'video'];
+  const panels = ['pipelineImages', 'pipelineScripts', 'pipelineStoryboards', 'pipelineVideos'];
   const stageLinks = [...document.querySelectorAll('[data-pipeline-step]')];
   const stageFromURL = () => stages[panels.indexOf(location.hash.slice(1))] || 'image';
   let initialProjectView = true;
@@ -25,9 +25,9 @@
       history.replaceState(null, '', url);
     }
     $('pipelinePrevious').disabled = index === 0;
-    $('pipelineNext').hidden = index === 2;
-    $('pipelineNext').textContent = index === 0 ? '下一步：脚本' : '下一步：视频';
-    $('pipelineStepLabel').textContent = `第 ${index + 1} 步，共 3 步`;
+    $('pipelineNext').hidden = index === 3;
+    $('pipelineNext').textContent = ['下一步：脚本','下一步：分镜审核','下一步：视频'][index] || '已到最后一步';
+    $('pipelineStepLabel').textContent = `第 ${index + 1} 步，共 4 步`;
   }
   for (const [index, link] of stageLinks.entries()) {
     link.addEventListener('click', event => { event.preventDefault(); showStage(link.dataset.pipelineStep); });
@@ -52,7 +52,7 @@
       ['生成中', new Set(['running', 'generating'])],
       ['保存中', new Set(['archiving', 'checking'])],
       ['排队中', new Set(['queued'])],
-      ['待确认', new Set(['uncertain'])]
+      ['结果未知', new Set(['uncertain'])]
     ];
     const summary = groups.map(([label, statuses]) => {
       const count = tasks.filter(task => statuses.has(task.status || task.current_job?.status)).length;
@@ -167,7 +167,7 @@
     for (const asset of project.assets.filter(asset => p.imageRefs.includes(asset.asset_id))) {
       const label = el('div', 'video-reference-choice'), input = el('input'); input.type = 'checkbox'; input.value = asset.asset_id; input.checked = true; input.hidden = true;
       input.addEventListener('change', () => { p.imageRefs = p.imageRefs.filter(id => id !== asset.asset_id); if (input.checked) p.imageRefs.push(asset.asset_id); p.imageRequest = uuid(); });
-      const image = el('img'); image.src = mediaURL(asset.url); image.alt = '';
+      const image = el('img'); image.src = mediaURL(`/api/video/projects/${project.project_id}/assets/${asset.asset_id}/thumbnail`); image.alt = ''; image.width = 160; image.height = 100; image.loading = 'lazy'; image.decoding = 'async';
       const remove = el('button', 'text-button', '移除'); remove.type = 'button';
       remove.setAttribute('aria-label', `移除参考图 ${asset.filename}`);
       remove.addEventListener('click', event => { event.preventDefault(); p.imageRefs = p.imageRefs.filter(id => id !== asset.asset_id); p.imageRequest = uuid(); refs(project); });
@@ -218,7 +218,8 @@
       if (task.error) card.append(el('p', '', task.error));
       const actions = el('div', 'pipeline-task-actions');
       if (task.status === 'completed') {
-        actions.append(action('为此版本规划分镜', async () => { if (!samePipeline(context)) return; const detail = await api(`/api/scripts/tasks/${task.task_id}`); if (!samePipeline(context)) return; window.IWStoryboard?.planScript(detail, 'pipeline'); }));
+        const planButton = action('为此版本规划分镜', async () => { if (!samePipeline(context)) return; const detail = await api(`/api/scripts/tasks/${task.task_id}`); if (!samePipeline(context)) return; await window.IWStoryboard?.planScript(detail, 'pipeline'); });
+        planButton.dataset.storyboardPlan = 'pipeline'; planButton.disabled = Boolean(window.IWStoryboard?.isPlanning('pipeline')); planButton.dataset.planning = String(planButton.disabled); actions.append(planButton);
         actions.append(action(selected ? '查看当前脚本' : '预览脚本', async () => {
           const result = await api(`/api/scripts/tasks/${task.task_id}`);
           if (!samePipeline(context)) return;
@@ -227,7 +228,7 @@
         if (!selected) actions.append(action('用于当前项目', async () => {
           if (!samePipeline(context)) return;
           await api(`/api/video/projects/${id}/script/from-task`, { method: 'POST', body: JSON.stringify({ task_id: task.task_id }) });
-          if (samePipeline(context)) { notice('已保存为当前项目脚本，可以继续第三步视频创作。'); await refresh(context); }
+          if (samePipeline(context)) { notice('已保存为当前项目脚本，下一步可规划和审核分镜。'); await refresh(context); }
         }, false));
         const download = el('a', 'text-button', '下载 TXT'); download.href = mediaURL(`/api/scripts/tasks/${task.task_id}/download`); actions.append(download);
         const editor = `/scripts?${new URLSearchParams({workspace_id:snapshot().account.workspace_id,main_project_id:data.main_project_id,subproject_id:data.subproject_id,task_id:task.task_id,action:'edit'})}`;
@@ -300,7 +301,7 @@
     });
   });
   function assetContext() {
-    const storyboard = currentStage === 'video' ? window.IWStoryboard?.assetTarget() : null;
+    const storyboard = currentStage === 'storyboard' ? window.IWStoryboard?.assetTarget() : null;
     return { ...captureContext(), storyboard, imageRequest: p.imageRequest,
       purpose: storyboard ? 'storyboard' : currentStage === 'image' ? 'reference' : currentStage === 'video' && !document.querySelector('[data-pipeline-pane="video:generate"]').hidden ? 'video' : null };
   }

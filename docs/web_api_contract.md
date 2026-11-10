@@ -97,3 +97,16 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 - 模型：公网使用 `provider:"deepseek_flash"`、官方 `deepseek-flash` 非思考模式并复用服务端文本 API 凭据；每次请求最多调用一次，离线演练显式使用 Mock。超时、空响应、格式或结构错误、编辑计划缺失、模型不可用、预算超限时返回 `status:"fallback"`、`enhanced_prompt` 等于原文，并以 `fallback.code` 标注 timeout/empty_response/invalid_json/invalid_schema/invalid_edit_plan/model_unavailable/model_error/budget_exceeded。
 - 计费与执行：本接口不修改任务状态、不写文件、不调用 ImageBackend、不冻结或扣减积分；图片生成价格不变。真实调用按账号+Workspace限制每小时/每天次数；`usage` 返回调用次数、Token（若有）以及仅在配置单价时计算的 `estimated_cost`/`currency`。
 - 溯源：用户点击“使用强化版”后，任务保存可附带 `original_prompt` 与 `prompt_source`（取自响应的 `source`）。服务端只接受固定字段，来源不合法返回400；未使用强化的任务两者均为null。
+
+## 内测反馈补充（2026-11-10）
+
+以下为兼容新增，不替换既有视频提交、Worker 完成或积分接口。写请求沿用登录、Workspace 与 CSRF 边界。
+
+| 方法与路径 | 请求 / 响应 | 约束 |
+| --- | --- | --- |
+| `POST /api/video/projects/{pid}/shots/{sid}/cancel` | `{job_id}` → 原视频 job 投影 | 仅所属空间；仅 queued 且无 claim；与领取共锁。重复取消幂等。已领取返回 409。内部沿用 failed 终态并退款，不新增账本状态 |
+| `GET /api/video/uncertain-jobs` | `{jobs:[...]}` | 仅有效管理员，全站未知视频；只读快照，附 backend、stage、worker_id、attempt_id、prompt_id、has_output 供核对 |
+| `POST /api/video/jobs/{job_id}/confirm-stopped` | `{confirmed:true,evidence:"核对依据"}` → job 投影 | 仅管理员，仅 uncertain 且无已上传输出或未归档的输出文件；保留操作者及依据，按既有失败结算释放冻结；重复确认幂等；不终止执行器、不重放生成 |
+| `GET /api/video/projects/{pid}/assets/{asset_id}/thumbnail` | JPEG，长边不超过 320px | 原资产身份/Workspace 校验，private 缓存；不改变原图与执行器输入 |
+
+网页提交前显示模式、参考图数、时长、尺寸与积分。T2V 有已选参考图时阻止保存，要求用户明确切换模式或取消选择。付费执行仍只有显式确认才提交原 `/run` 接口。

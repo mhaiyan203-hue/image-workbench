@@ -6,7 +6,7 @@
   const state = { account: null, config: null, csrf: '', project: null, mainProjectId: null, subprojectId: null,
     mainProjects: [], videoProjects: [], treeSequence: 0, shotRequest: uuid(), referenceOrder: [], runRequests: new Map(),
     projectSignature: '', loading: false, draftRevision: 0, shotRevision: 0, projectReadSequence: 0 };
-  const labels = { draft: '待生成', queued: '已排队', running: '生成中', generating: '生成中', completed: '已完成', failed: '生成失败', uncertain: '状态待确认' };
+  const labels = { draft: '待生成', queued: '已排队', running: '生成中', generating: '生成中', completed: '已完成', failed: '生成失败', uncertain: '结果未知 · 需核对' };
   const modes = { T2V: '文生视频', I2V: '首帧生视频', FL2V: '首尾帧生视频', R2V: '参考素材' };
   const resolutions = ['720p', '1080p'];
   const ratioNames = { landscape: '横向', portrait: '竖向', square: '方形' };
@@ -130,7 +130,7 @@
     if (button.disabled) return;
     button.disabled = true;
     try { await action(); } catch (error) { notice(error.message, true); }
-    finally { if (button.isConnected) button.disabled = false; }
+    finally { if (button.isConnected) button.disabled = button.dataset.planning === 'true'; }
   }
   function mediaURL(path) {
     if (typeof path !== 'string' || !/^\/api\/(video\/|artifacts\/|scripts\/tasks\/)/.test(path)) return '';
@@ -284,7 +284,7 @@
     $('videoReferenceChoices').replaceChildren();
     for (const [index, asset] of project.assets.entries()) {
       const figure = el('figure', 'video-asset');
-      const image = el('img'); image.src = mediaURL(asset.url); image.alt = asset.filename; image.loading = 'lazy';
+      const image = el('img'); image.src = mediaURL(`/api/video/projects/${project.project_id}/assets/${asset.asset_id}/thumbnail`); image.decoding = 'async'; image.width = 160; image.height = 100; image.alt = asset.filename; image.loading = 'lazy';
       figure.append(image, el('figcaption', '', `${index + 1}. ${asset.filename}`));
       if (window.IWAssetTray) figure.append(window.IWAssetTray.imageActions(asset));
       $('videoAssetGrid').append(figure);
@@ -309,8 +309,8 @@
   }
   function updateMode() {
     const mode = $('videoMode').value;
-    $('videoReferenceHelp').textContent = mode === 'T2V' ? '文生视频仅使用本镜头的文字描述。' : mode === 'I2V' ? '选择 1 张图片作为首帧，视频从该画面开始。' : mode === 'FL2V' ? '选择 2 张图片：先添加首帧，再添加尾帧。移除后重新添加可调整顺序。' : '选择 1–9 张参考图；按添加顺序对应 Picture 1、Picture 2…移除后重新添加可调整顺序。';
-    for (const input of $('videoReferenceChoices').querySelectorAll('input')) input.disabled = mode === 'T2V';
+    $('videoReferenceHelp').textContent = mode === 'T2V' ? `文生视频不使用参考图。已选 ${state.referenceOrder.length} 张已保留但不会生效；请移除参考图后保存。` : mode === 'I2V' ? '选择 1 张图片作为首帧，视频从该画面开始。' : mode === 'FL2V' ? '选择 2 张图片：先添加首帧，再添加尾帧。移除后重新添加可调整顺序。' : '选择 1–9 张参考图；按添加顺序对应 Picture 1、Picture 2…移除后重新添加可调整顺序。';
+    for (const input of $('videoReferenceChoices').querySelectorAll('input')) input.disabled = false;
     referenceLabels();
   }
   function updateBackend() {
@@ -336,8 +336,44 @@
     const mode = $('videoMode').value;
     for (const label of $('videoReferenceChoices').querySelectorAll('.video-reference-choice')) {
       const index = state.referenceOrder.indexOf(label.querySelector('input').value);
-      label.querySelector('.video-reference-order').textContent = mode === 'T2V' || index < 0 ? '' : mode === 'I2V' ? (index === 0 ? '首帧' : '多余参考图') : mode === 'FL2V' ? (['首帧', '尾帧'][index] || '多余参考图') : `Picture ${index + 1}`;
+      label.querySelector('.video-reference-order').textContent = index < 0 ? '' : mode === 'T2V' ? '未生效' : mode === 'I2V' ? (index === 0 ? '首帧' : '多余参考图') : mode === 'FL2V' ? (['首帧', '尾帧'][index] || '多余参考图') : `Picture ${index + 1}`;
     }
+  }
+  async function generateShot(shot) {
+    const context = captureContext();
+    if (shot.project_id !== context.id) throw new Error('项目已改变，请重新选择镜头');
+    if (shot.run_blocked_reason) throw new Error(shot.run_blocked_reason);
+    if (active.has(shot.status) || shot.status === 'completed') { location.hash = 'pipelineVideos'; return; }
+    const expected = shot.estimated_credit;
+    if (!Number.isInteger(expected) || expected < 1) throw new Error('请刷新视频报价');
+    const summary = `确认生成「${shot.name}」？\n模式：${shot.mode}（${modes[shot.mode]}）\n参考图：${(shot.reference_ids || []).length} 张${shot.mode === 'T2V' ? '，文生视频不使用图片' : ''}\n时长：${shot.duration} 秒\n分辨率：${shot.resolution} · ${shot.width} × ${shot.height}\n将冻结：${expected} 积分\n未被执行器领取前可取消；领取后不可在网页中止。`;
+    if (!window.confirm(summary) || !isCurrent(context)) return;
+    const job = shot.current_job, key = `${shot.shot_id}:${job?.job_id || 'first'}`;
+    if (!state.runRequests.has(key)) state.runRequests.set(key, uuid());
+    const body = {request_id:state.runRequests.get(key),confirm_generation:true,expected_credit:expected};
+    if (job?.status === 'failed') body.retry_of = job.job_id;
+    await api(`/api/video/projects/${context.id}/shots/${shot.shot_id}/run`, {method:'POST',body:JSON.stringify(body)});
+    if (!isCurrent(context)) return;
+    await refresh(context); location.hash = 'pipelineVideos'; notice(`镜头已排队，冻结 ${expected} 积分。视频执行器未领取前可取消。`);
+  }
+  async function inspectQueue() {
+    const data = await api('/api/video/uncertain-jobs');
+    const panel = $('videoRecoveryPanel'); panel.replaceChildren(el('h3','','视频执行器核对'));
+    for (const job of data.jobs) {
+      const row=el('div','panel'); row.append(el('pre','field-hint',JSON.stringify(job,null,2)));
+      if (!job.has_output) {
+        const evidence=el('textarea'); evidence.placeholder='填写核对依据：原执行器、任务回执、停止时间及无结果证据'; evidence.setAttribute('aria-label','停止核对依据');
+        const button=el('button','secondary-button','确认原任务已停止且无结果 · 释放冻结');button.type='button';
+        button.addEventListener('click',()=>busy(button,async()=>{
+          if (!evidence.value.trim()) throw new Error('请先填写执行器核对依据');
+          if (!window.confirm('仅在已核对原执行停止且无可交付结果时确认。此操作不会终止执行器，也不会重新生成。')) return;
+          await api(`/api/video/jobs/${job.job_id}/confirm-stopped`,{method:'POST',body:JSON.stringify({confirmed:true,evidence:evidence.value.trim()})});
+          await inspectQueue(); await refresh();
+        }));row.append(evidence,button);
+      } else row.append(el('p','','已有输出，请先核对归档，不可直接释放冻结。'));
+      panel.append(row);
+    }
+    if (!data.jobs.length) panel.append(el('p','','当前无结果未知的视频任务。'));
   }
   function renderShots(project) {
     const existingVideos = new Map(Array.from($('videoShots').querySelectorAll('video'), video => [video.dataset.jobId, video]));
@@ -360,7 +396,7 @@
       const displayMode = shot.mode === 'I2V' && shot.reference_ids?.length === 2 ? 'FL2V' : shot.mode;
       const meta = shot.source === 'upload' ? '用户上传 · MP4 · 0 积分' : `${shot.backend === 'online-2.0' ? 'SD2.0 · ' : 'H3 · '}${modes[displayMode] || displayMode} · ${resolution || '旧版分镜'}${size} · ${shot.duration} 秒 · ${(shot.reference_ids || []).length} 张参考图${cost != null ? ` · ${cost} 积分` : resolution ? ' · 待设置价格' : ''}`;
       copy.append(heading, el('p', 'video-shot-meta', meta), el('p', 'video-shot-prompt', shot.prompt));
-      if (status === 'failed' || status === 'uncertain') copy.append(el('p', 'field-hint', status === 'uncertain' ? '原任务结果尚未确认，积分仍冻结。请联系管理员核对执行器；不会自动重复生成。' : `本次未完成，冻结积分已退回。${requiresRebuild || blockedReason ? '' : '可检查素材后重新提交。'}`));
+      if (status === 'failed' || status === 'uncertain') copy.append(el('p', 'field-hint', status === 'uncertain' ? `结果未知，仍冻结 ${cost ?? '待核对'} 积分，并占用视频执行名额。无需再次点击生成；管理员需核对原执行器及结果，确认无结果且已停止后释放。任务编号：${job?.job_id || ''}` : `本次未完成，冻结积分已退回。${requiresRebuild || blockedReason ? '' : '可检查素材后重新提交。'}`));
       const actions = el('div', 'video-shot-actions');
       if (status === 'draft' || status === 'failed') {
         if (requiresRebuild || blockedReason) {
@@ -371,16 +407,7 @@
           button.type = 'button'; button.disabled = !canGenerate;
           button.addEventListener('click', () => busy(button, async () => {
             const context = captureContext(); if (context.id !== project.project_id || !isCurrent(context)) return;
-            const key = `${shot.shot_id}:${job?.job_id || 'first'}`;
-            if (!state.runRequests.has(key)) state.runRequests.set(key, uuid());
-            const body = { request_id: state.runRequests.get(key), confirm_generation: true, expected_credit: expected };
-            if (status === 'failed') body.retry_of = job.job_id;
-            await api(`/api/video/projects/${project.project_id}/shots/${shot.shot_id}/run`, { method: 'POST', body: JSON.stringify(body) });
-            if (!isCurrent(context)) return;
-            const workers = state.config.workers_online;
-            const online = shot.backend === 'online-2.0' ? workers?.['online-2.0'] && workers?.['online-planner'] : state.config.worker_online;
-            notice(`镜头已排队，已冻结 ${expected} 积分。${online ? '' : '执行器上线后会继续处理。'}`);
-            await refresh(context);
+            await generateShot(shot);
           }));
           actions.append(button);
         }
@@ -388,7 +415,16 @@
       if (shot.download_url) {
         const link = el('a', 'secondary-button', '下载 MP4'); link.href = mediaURL(shot.download_url); actions.append(link);
       }
-      if (status === 'queued') actions.append(el('span', 'field-hint', '等待执行器 · 不会重复提交'));
+      if (status === 'queued') {
+        const cancel = el('button', 'secondary-button', '取消排队 · 释放冻结积分'); cancel.type = 'button';
+        cancel.addEventListener('click', () => busy(cancel, async () => {
+          const context = captureContext();
+          await api(`/api/video/projects/${project.project_id}/shots/${shot.shot_id}/cancel`, {method:'POST',body:JSON.stringify({job_id:job.job_id})});
+          if (isCurrent(context)) { await refresh(context); notice('已取消未领取任务，冻结积分已释放。'); }
+        })); actions.append(cancel);
+      }
+      if (status === 'running' || status === 'generating') actions.append(el('p','field-hint','执行器已领取，网页不能中止；请等待结果。异常时查看执行状态，不要重复提交。'));
+      if (active.has(status)) { const inspect=el('button','text-button','查看执行状态与恢复指引');inspect.type='button';inspect.addEventListener('click',()=>busy(inspect,async()=>{const r=await api(`/api/video/projects/${project.project_id}/shots/${shot.shot_id}/recovery`);const detail=el('p','field-hint',`任务：${r.job_id || '尚未提交'} · ${labels[r.status] || r.status}。${r.failure?.message || ''}${r.evidence?.has_output ? '已收到输出，等待执行器校验归档。' : r.status === 'uncertain' ? '请将任务编号交给管理员；管理员可在本页顶部的核对入口查看原执行记录，确认停止且无结果后释放冻结。' : r.status === 'queued' ? '仍在排队，可以尝试取消；状态以服务器核验为准。' : '执行器处理期间不能在网页中止，请等待结果。'}`);actions.querySelector('[data-recovery-detail]')?.remove();detail.dataset.recoveryDetail='true';actions.append(detail);}));actions.append(inspect); }
       if (shot.output_url && window.IWAssetTray) actions.append(window.IWAssetTray.videoActions({artifact_id:shot.artifact_id || shot.output?.artifact_id,media_type:'video',shot_id:shot.shot_id,filename:shot.name,url:mediaURL(shot.output_url),download_url:mediaURL(shot.download_url)}));
       if (shot.bound_clip) { const preview=el('button','text-button','预览绑定视频'); preview.type='button'; preview.addEventListener('click',()=>window.IWAssetActions.preview({...shot.bound_clip,media_type:'video',filename:shot.name})); actions.append(preview); }
       copy.append(actions);
@@ -547,7 +583,8 @@
       const id = (await ensureProject()).project_id;
       const context = captureContext();
       const mode = $('videoMode').value;
-      const refs = mode === 'T2V' ? [] : [...state.referenceOrder];
+      if (mode === 'T2V' && state.referenceOrder.length) throw new Error('已选参考图在文生视频中不会生效，请移除参考图或选择支持参考图的工作流');
+      const refs = [...state.referenceOrder];
       if ($('videoBackend').value === 'online-2.0' && ![5, 10, 15].includes(Number($('videoDuration').value))) throw new Error('SD2.0 的时长请选择 5、10 或 15 秒');
       if (mode === 'I2V' && refs.length !== 1) throw new Error('首帧模式需要选择 1 张参考图');
       if (mode === 'FL2V' && refs.length !== 2) throw new Error('首尾帧模式需要选择 2 张参考图，依次为首帧和尾帧');
@@ -575,7 +612,7 @@
   });
   $('videoLogout').addEventListener('click', event => busy(event.currentTarget, async () => { await api('/api/auth/logout', { method: 'POST' }); location.assign('/login'); }));
 
-  window.IWVideo = Object.freeze({ snapshot, captureContext, isCurrent, setReferences, addReferences, refreshProject,
+  window.IWVideo = Object.freeze({ generateShot, snapshot, captureContext, isCurrent, setReferences, addReferences, refreshProject,
     api, refresh, notice, busy, mediaURL, el, uuid, ensureProject, selectProject, selectSubproject, selectMainProject,
     loadProjectTree, openProjectDialog });
   (async () => {
@@ -604,6 +641,10 @@
           notice(state.mainProjects.length ? '请在左侧为新项目创建或选择一个子项目' : '请点击左侧 + 新建主项目，再创建子项目');
         }
       }
+    }
+    if (state.config.is_admin) {
+      const panel=el('section','panel');panel.id='videoRecoveryPanel';$('videoNotice').after(panel);
+      const button=el('button','secondary-button','管理员：核对视频执行器 / 解除冻结');button.type='button';button.addEventListener('click',()=>busy(button,inspectQueue));panel.before(button);
     }
     document.dispatchEvent(new CustomEvent('video-ready'));
     setInterval(() => { if (!document.hidden && state.account) refresh().catch(error => notice(error.message, true)); }, 8000);

@@ -28,6 +28,42 @@ class VideoStateBrowserTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
+    def test_video_confirmation_cancel_and_reference_conflict(self):
+        asset = self.post(f"/api/video/projects/{self.pid}/assets", files={"files": ("red.png", png(), "image/png")})["assets"][0]
+        self.video()
+        self.page.locator('[data-pipeline-step="video"]').click()
+        self.page.locator('#videoShotName').fill('确认测试')
+        self.page.locator('#videoShotPrompt').fill('合成画面，不调用模型')
+        self.page.locator('#videoMode').select_option('R2V')
+        self.page.evaluate("id => window.IWVideo.setReferences([id], {mode:'R2V'})", asset['asset_id'])
+        self.page.locator('#videoMode').select_option('T2V')
+        self.page.locator('#videoShotForm button[type=submit]').click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('不会生效')
+        self.assertEqual(self.get(f"/api/video/projects/{self.pid}")["shots"], [])
+        self.page.get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        self.page.locator('#videoShotForm button[type=submit]').click()
+        run = self.page.locator('#videoShots .primary-button').first
+        expect(run).to_be_visible()
+        dialogs = []
+        def reject(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+        self.page.once('dialog', reject)
+        run.click()
+        self.assertIn('T2V', dialogs[0])
+        for label in ('参考图：0', '时长：5', '分辨率：720p', '将冻结：'):
+            self.assertIn(label, dialogs[0])
+        self.assertEqual(self.app.video_store._jobs(), [])
+        self.page.once('dialog', lambda dialog: dialog.accept())
+        run.click()
+        cancel = self.page.get_by_role('button', name='取消排队 · 释放冻结积分', exact=True)
+        expect(cancel).to_be_visible()
+        cancel.click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('冻结积分已释放')
+        self.assertEqual(self.app.identity.wallet(self.aid)['frozen_credit'], 0)
+        self.assertEqual(self.app.identity.wallet(self.aid)['used_credit'], 0)
+        self.page.screenshot(path=str(fixtures.SCREENSHOTS / 'beta-video-confirmation.png'), full_page=True)
+
     def tearDown(self):
         self.assertEqual(self.errors, [])
         self.model.generate.assert_not_called()
@@ -113,12 +149,17 @@ class VideoStateBrowserTests(unittest.TestCase):
         self.page.locator('#videoShotName').fill('在线测试草稿')
         self.page.locator('#videoShotPrompt').fill('红色纸片缓慢旋转')
         self.page.locator('#videoShotForm button[type="submit"]').click()
-        expect(self.page.locator('#videoNotice')).to_contain_text('分镜已保存')
-        shot = self.get(f"/api/video/projects/{self.pid}")['shots'][-1]
-        self.assertEqual((shot['backend'], shot['mode'], shot['reference_ids']), ('online-2.0', 'T2V', []))
+        expect(self.page.locator('#videoNotice')).to_contain_text('不会生效')
+        self.assertEqual(self.get(f"/api/video/projects/{self.pid}")['shots'], [])
         self.page.locator('#videoBackend').select_option('h3')
         expect(self.page.locator('#videoMode')).to_have_value('I2V')
         self.assertTrue(self.page.locator('#videoReferenceChoices input').first.is_checked())
+        self.page.locator('#videoBackend').select_option('online-2.0')
+        self.page.get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        self.page.locator('#videoShotForm button[type="submit"]').click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('分镜已保存')
+        shot = self.get(f"/api/video/projects/{self.pid}")['shots'][-1]
+        self.assertEqual((shot['backend'], shot['mode'], shot['reference_ids']), ('online-2.0', 'T2V', []))
     def test_project_tree_navigation_uses_shared_main_subprojects_without_starting_jobs(self):
         self.video()
         expect(self.page.locator("#videoProjectList")).to_contain_text("浏览器项目 A")

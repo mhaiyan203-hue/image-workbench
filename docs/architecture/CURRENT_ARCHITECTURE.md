@@ -1,5 +1,7 @@
 # 当前架构审计
 
+> 本文是 2026-10-20～22 的架构审计快照。2026-11-11 文档核对：当前图片、文本及视频分别使用图片 API、DeepSeek Flash、SD2.0；下文 Codex/H3 的 Provider 描述保留历史背景，现行装配见 [架构指南](../architecture.md) 与 [API 流程](../api_runtime.md)。
+
 审计起点：2026-10-20；状态更新：2026-10-22。依据工作区源码、静态导入图、实际调用点和离线测试；不是生产状态报告。
 日常修改入口仍为 [架构指南](../architecture.md)，允许依赖的唯一机器配置为 [architecture.json](../../architecture.json)。
 职责索引见 [模块图](MODULE_MAP.md)，具体问题见 [依赖审计](DEPENDENCY_AUDIT.md) 与 [技术债](TECHNICAL_DEBT.md)。

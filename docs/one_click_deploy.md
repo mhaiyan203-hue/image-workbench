@@ -5,13 +5,13 @@
 首次完成腾讯云服务器初始化并填好连接配置后，每次改完网站，在本机项目目录执行：
 
 ```powershell
-cd "D:\ChatGPT\图片网站"
+# 在当前仓库根目录运行
 .\scripts\deploy.ps1
 ```
 
 命令会运行本地回归检查 → 打包应用程序 → 使用 SSH 上传 → 在服务器独立目录安装依赖 → 切换版本并重启服务 → 检查登录入口。成功后刷新网页即可使用新版。
 
-腾讯云服务器已完成首次配置，当前入口为 [https://124.156.182.151](https://124.156.182.151)。本机 `deploy/server.json` 已设置服务器连接，后续保存代码后可直接运行上面的发布命令。账号启用、本机执行器和维护位置见 [当前部署说明](tencent_live_deployment.md)。
+现有站点入口为 [https://124.156.182.151](https://124.156.182.151)，带日期的核验见 [部署记录](tencent_live_deployment.md)。新克隆或新工作区需要单独配置 `deploy/server.json`；不要假定私密连接文件随 Git 同步。图片、DeepSeek Flash 和 SD2.0 的配置及执行器入口见 [当前 API 流程](api_runtime.md)。
 
 ## 只做一次的本机配置
 
@@ -56,7 +56,7 @@ Copy-Item -LiteralPath .\deploy\server.example.json -Destination .\deploy\server
 
 1. 在本地改好并保存网站功能。
 2. 运行 `.\scripts\deploy.ps1`，等待“服务器版本更新成功”。
-3. 刷新网站。若本次也更新了本机执行器代码，等当前任务结束后重启本机执行器。
+3. 刷新网站。若本次也更新了独立执行器代码，核实正在执行的任务，按持久检查点恢复规则更新并重启对应 Worker。不要假定所有执行器服务都随网站自动重启。
 
 如果发布检查期间又修改了程序文件，脚本会停止；保存完成后重新运行。检查失败或依赖安装失败时，不切换服务器版本。版本切换需要重启网站，会有短暂访问中断；本机已经生成的图片保留在缓存中，断线后按原协议回传。
 
@@ -72,7 +72,7 @@ Copy-Item -LiteralPath .\deploy\server.example.json -Destination .\deploy\server
 
 这会实际运行本地检查并生成 `.deploy/版本号/release.tar.gz`，不连接服务器。该目录还保存检查输出 `checks.txt` 和文件校验清单 `manifest.json`。
 
-发布包包含 `image_workbench/` 程序与网页资源、两个运行依赖清单、版本清单，以及脚本、分镜、H3 的运行配置和对应 Skill、模板、案例及许可来源文件。`skills/image-generation-default/` 的默认图片规则、风格目录和来源说明也随包上传，8 张风格预览图位于网页静态资源目录。不会上传其他配置、本机 `data/`、账号登录缓存、SSH 私钥、`.venv/`、本机任务缓存、报告或服务器配置文件。服务器在切换版本前检查脚本模板、分镜规则、模型配置和默认图片 Skill 可加载。
+发布包包含 `image_workbench/` 程序与网页资源、运行依赖清单、版本清单，以及脚本、分镜、DeepSeek 和视频规划所需的配置、Skill、模板及许可来源文件；H3 的兼容资源仍保留。`skills/image-generation-default/` 的默认图片规则、风格目录和来源说明也随包上传，8 张风格预览图位于网页静态资源目录。打包白名单以 `scripts/deploy_release.py` 为准；不会上传本机 `data/`、API Key、账号登录缓存、SSH 私钥、`.venv/`、任务缓存、报告或服务器私密配置文件。服务器在切换版本前检查运行资源可加载。
 提示词强化还随包发布 `config/prompt_enhancement.json`、提示词 Skill 与图片风格 JSON，切换前检查可加载。
 
 部署脚本的打包边界、输入校验、检查失败拦截和代码变动拦截已经自动验证；健康检查失败回退在 WSL/Linux 中使用模拟 systemd 验证。腾讯云首次发布已验证真实 systemd、依赖安装、当前版本切换、登录入口和公网 HTTPS。真实服务回退尚未人为制造故障演练。

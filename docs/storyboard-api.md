@@ -1,4 +1,4 @@
-# Storyboard 增量接口（本地实现契约）
+# Storyboard 接口契约
 
 所有 HTTP 接口复用账号、Workspace、CSRF 边界，ID 为 32 位小写十六进制。时间为整数毫秒。
 
@@ -10,9 +10,9 @@
 
 规划 options：
 ```json
-{"mode":"mock","selection_mode":"recommended","target_duration_ms":60000,"aspect_ratio":"16:9","visual_style":"","characters":"","scenes":"","requirements":"","reference_artifact_ids":[],"video_model_id":"h3"}
+{"mode":"api","selection_mode":"recommended","target_duration_ms":60000,"aspect_ratio":"16:9","visual_style":"","characters":"","scenes":"","requirements":"","reference_artifact_ids":[],"video_model_id":"online-2.0"}
 ```
-可手动传 `model_id`、`thinking_level`，可传 `video_project_id`。Mock 0 积分，真实模式默认关闭。
+可手动传 `model_id`、`thinking_level`，可传 `video_project_id`。当前装配使用 DeepSeek Flash，模型和价格来自 `config/deepseek/`；配置已启用真实模式与站内免费测试档位，供应方调用仍需要有效 Key。离线演练显式传 `mode:"mock"`。请求兼容旧 `mode:"codex"` 值，但实际调用由注入的 Adapter 决定，不能据此认为网页仍使用 Codex CLI。
 
 `POST /api/storyboards/quote`：options + `source_script_version` → `{model_id,display_name,thinking_level,price,can_generate,pricing_status,reason,shortfall,quote_signature}`。
 
@@ -51,6 +51,8 @@ Shot：shot_id/order/scene_id/title/narrative_duration_ms/generation_duration_ms
 视频 shot/result 绑定 `{storyboard_id,storyboard_version,storyboard_shot_id}`；视频成功登记 MP4 Artifact。`videos` 含原 shot/status/output_url/artifact_id/outdated，按稳定 ID 和内容指纹比对（重排不算过期）。
 原 VideoStore 中 `shot_id` 是视频任务卡 ID；`storyboard_shot_id` 才是规划镜头的稳定身份。图片导入保留原 Artifact ID。创建视频草稿、提交实际视频任务时均检查引用图片是否存在及内容哈希，缺失时阻止，不以缓存副本替代。H3 首尾帧模式不能同时携带额外多图参考，明确拒绝而不静默丢弃。
 
+上述 I2V／R2V 映射为兼容后端的通用规则。当前网站新任务只启用 `online-2.0`，仅接受无参考图的 720p T2V、5／10／15 秒；带首尾帧或参考图的镜头需要用户明确调整，不能静默丢弃图片再提交。实际调用链见 [API 流程](api_runtime.md)。
+
 界面复用当前布局。脚本区增加复选框和独立规划参数、阶段费用；历史脚本可选择具体版本规划。视频区清单/编辑/拖动/拆分合并/预览确认/历史版本；选中镜头在现有视频表单带入字段，生成仍走原链路。
 绑定镜头后，原视频表单的标题、提示词、生成时长、画幅、模式与有序参考图修改先保存为新分镜版本，用户核对审核或明确草稿测试后再创建视频草稿。视频资产 ID 转回 Artifact ID；I2V 映射首/尾帧，R2V 映射参考列表，T2V 明确清空引用。缺失或尚未映射到视频区的原引用不被静默删除，需在分镜编辑区明确调整。
 
@@ -58,7 +60,7 @@ Shot：shot_id/order/scene_id/title/narrative_duration_ms/generation_duration_ms
 
 Task 使用 `queued/running/completed/failed/cancelled/uncertain`；生成完成后的 `review_status=awaiting_review` 与分镜本身的 `draft/awaiting_review/approved/revision_required` 分开管理。预览接受不等于审核通过，正式候选仍待审核。
 
-提交按账号与 `request_id` 幂等；参数改变复用 ID 会被拒绝。执行有跨进程任务锁，服务端在 TXT/Artifact/Version 归档后触发第二阶段，浏览器刷新只查询原任务。启动扫描持久化阶段意图和积分 outbox；仅执行从未开始的 queued 任务，已有 JSON 候选或匹配 Codex 完成凭据只做归档，不重调模型。无凭据的中断执行标记 uncertain，保留冻结额度等待核对。完成或取消的 JSON 已落盘但账本未结算时，启动恢复补结算。
+提交按账号与 `request_id` 幂等；参数改变复用 ID 会被拒绝。执行有跨进程任务锁，服务端在 TXT/Artifact/Version 归档后触发第二阶段，浏览器刷新只查询原任务。启动扫描持久化阶段意图和积分 outbox；仅执行从未开始的 queued 任务，已有 JSON 候选或匹配的文本完成凭据只做归档，不重调模型。无凭据的中断执行标记 uncertain，保留冻结额度等待核对。完成或取消的 JSON 已落盘但账本未结算时，启动恢复补结算。
 任务提交时保存完整规划提示词；排队后执行直接使用该快照，不重新读取 Skill 组装不同提示词，保证真实调用、凭据与分镜版本记录一致。
 
 JSON/MP4 使用临时文件写入、fsync、原子替换后登记 Artifact。分镜版本采用 pending 记录恢复归档，原版本不覆盖。仍有活动分镜任务的项目不能移动或删除。

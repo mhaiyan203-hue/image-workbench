@@ -97,3 +97,8 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 - 模型：公网使用 `provider:"deepseek_flash"`、官方 `deepseek-flash` 非思考模式并复用服务端文本 API 凭据；每次请求最多调用一次，离线演练显式使用 Mock。超时、空响应、格式或结构错误、编辑计划缺失、模型不可用、预算超限时返回 `status:"fallback"`、`enhanced_prompt` 等于原文，并以 `fallback.code` 标注 timeout/empty_response/invalid_json/invalid_schema/invalid_edit_plan/model_unavailable/model_error/budget_exceeded。
 - 计费与执行：本接口不修改任务状态、不写文件、不调用 ImageBackend、不冻结或扣减积分；图片生成价格不变。真实调用按账号+Workspace限制每小时/每天次数；`usage` 返回调用次数、Token（若有）以及仅在配置单价时计算的 `estimated_cost`/`currency`。
 - 溯源：用户点击“使用强化版”后，任务保存可附带 `original_prompt` 与 `prompt_source`（取自响应的 `source`）。服务端只接受固定字段，来源不合法返回400；未使用强化的任务两者均为null。
+
+
+## 图片内测账号权限（2026-11-11）
+
+`GET /api/auth/me` 兼容性新增 `image_only: boolean`。服务端根据账号批次表及管理员身份决定该值，普通注册和请求参数不能设置。受限账号访问 `/scripts`、`/video`、`/api/scripts`、`/api/video`、`/api/storyboards` 及其子路径返回 HTTP 403，错误码 `feature_not_enabled`。图片和提示词增强接口保持可用；工作区切换不改变限制；管理员和无批次标记的历史账号权限保持原样。Worker端点仍使用原有独立鉴权。详见 [图片试用账号](image_trials_20261111.md)。

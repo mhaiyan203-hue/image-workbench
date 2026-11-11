@@ -130,6 +130,11 @@ class AccountApplication:
             return
         headers = dict(scope["headers"])
         query = parse_qs(scope.get("query_string", b"").decode("ascii", errors="ignore"))
+        if session.get("image_only") and (path.rstrip("/") in {"/scripts", "/video"}
+                or any(path == prefix or path.startswith(prefix + "/")
+                       for prefix in ("/api/scripts", "/api/video", "/api/storyboards"))):
+            await JSONResponse({"detail": "此试用账号仅开放图片功能", "code": "feature_not_enabled"}, status_code=403)(scope, receive, send)
+            return
         wid = headers.get(b"x-workspace-id", b"").decode() or query.get("workspace_id", [session["workspace_id"]])[0]
         try:
             await run_in_threadpool(self.identity.require_workspace, session["account_id"], wid)
@@ -218,6 +223,7 @@ class AccountApplication:
         def me(request: Request):
             session = request.scope["account_session"]
             return {"account_id": session["account_id"], "username": session["username"], "is_admin": bool(session["is_admin"]),
+                    "image_only": bool(session.get("image_only")),
                     "workspace_id": request.scope["workspace_id"], "workspaces": identity.workspaces(session["account_id"]), "credits": identity.wallet(session["account_id"])}
 
         @app.get("/api/workspaces")

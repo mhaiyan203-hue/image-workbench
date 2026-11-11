@@ -106,7 +106,10 @@ class ImageActionsBrowserTests(unittest.TestCase):
         expect(self.page.locator("#batchSelectionSummary")).to_have_text("已选 2 项 · 预计 80 积分")
         self.page.evaluate("window.scrollTo(0, 0)")
         self.page.screenshot(path=str(SCREENSHOTS / "desktop.png"), full_page=True)
-        self.page.locator("#batchGenerateButton").evaluate("button => { button.click(); button.click(); }")
+        with self.page.expect_response(lambda response: response.request.method == "POST"
+                                       and response.url.endswith(f"/api/tasks/{tasks[2]['task_id']}/run")) as submitted:
+            self.page.locator("#batchGenerateButton").evaluate("button => { button.click(); button.click(); }")
+        self.assertEqual(submitted.value.status, 200)
         expect(self.page.locator("#batchMessage")).to_have_text("已提交 2 项任务，系统将自动安排生成。")
         jobs = self.app.state.workbench.list_jobs()
         self.assertEqual([job["task_id"] for job in jobs], [tasks[0]["task_id"], tasks[2]["task_id"]])

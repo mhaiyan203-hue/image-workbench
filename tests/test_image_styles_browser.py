@@ -103,12 +103,24 @@ class ImageStylesBrowserTests(unittest.TestCase):
         self.page.screenshot(path=str(SCREENSHOTS / "style-saved-task.png"))
 
     def test_catalog_failure_keeps_form_usable_and_gallery_can_retry(self):
-        self.page.route("**/api/image-styles", lambda route: route.abort(), times=1)
+        attempts = []
+
+        def first_request_fails(route):
+            attempts.append(route.request.url)
+            if len(attempts) == 1:
+                route.abort()
+            else:
+                route.continue_()
+
+        # Removing the last interception during abort can strand concurrent
+        # Chromium requests. Keep it installed while the gallery retries.
+        self.page.route("**/api/image-styles", first_request_fails)
         self.root_page()
         expect(self.page.locator("#saveTaskButton")).to_be_enabled()
         expect(self.page.locator("#imageStyleSelect option")).to_have_count(1)
         self.gallery()
         expect(self.page.locator("#imageStyleSelect option")).to_have_count(9)
+        self.assertEqual(len(attempts), 2)
 
     def test_mobile_gallery_has_no_horizontal_overflow_and_can_apply(self):
         self.root_page()

@@ -1,4 +1,24 @@
-# 第二阶段使用说明
+# 图片任务执行器使用说明
+
+## 当前图片 API 入口
+
+网页和 Worker 的配置见 [当前 API 流程](api_runtime.md)。底层 CLI 同样通过 `TaskRunner` 调用 `ImageAPIBackend`，保存参考图快照、校验候选文件并归档。配置 `deploy/image-api.local.json` 后，可在独立开发数据目录执行：
+
+```powershell
+$env:IMAGE_WORKBENCH_IMAGE_API_CONFIG = (Resolve-Path 'deploy/image-api.local.json').Path
+$env:IMAGE_WORKBENCH_DATA_ROOT = (Join-Path $PWD 'work/cli-api-data')
+$p = python -m image_workbench project-create --name "图片 API 验收" | ConvertFrom-Json
+$t = python -m image_workbench task-create --project $p.project_id --operation generate --prompt "白色背景上的蓝色陶瓷杯静物照片，无文字" | ConvertFrom-Json
+# 此命令会真实调用供应方 API
+python -m image_workbench run --project $p.project_id --task $t.task_id --backend image-api --allow-image-generation --timeout 600
+python -m image_workbench outputs --project $p.project_id --task $t.task_id
+```
+
+`run`／`batch` 的真实图片调用必须显式传 `--allow-image-generation`。底层 CLI 面向可信本机操作者，不代替网页的账号、Workspace 与积分提交入口。图片 API 的有限重试、读写超时处理和恢复规则见 [协议说明](image_api_integration.md)。`doctor` 仍检查旧 Codex 环境，不能用它判断图片 API 是否可用。
+
+## 历史第二阶段说明
+
+下文保留 2026-10-12 的本地执行器、Codex CLI 与演练后端说明，包括当时尚未建设网页的状态。它用于排查旧任务，不代表当前 API 部署前提；当前网页与持久队列已经存在。
 
 已实现本地执行器和命令行。日常使用顺序为：创建任务 → 选择后端执行 → 检查状态 → 查询输出 → 基于输出创建编辑任务。
 自动化测试不调用图片模型。2026-10-12 已在用户授权下完成真实生成和编辑，分别用时约 44 秒和 62 秒，均自动归档；详见 [最新验收记录](acceptance/2026-10-12-run-02/report.md)。真实调用需由用户主动选择或明确授权，执行器本身不在超时后自动重试。

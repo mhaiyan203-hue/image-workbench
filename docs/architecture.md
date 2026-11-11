@@ -30,7 +30,6 @@
 | 脚本素材与模板 | `script_resources.py`、`script_engine.py`、`script_resource_web.py` | 空间隔离、结构解析、上传内容作为数据 |
 | 分镜规划 | `storyboard_service.py`、`storyboard_models.py`、`storyboard_planner.py` | 独立规划服务，通过已有脚本/视频服务衔接 |
 | 视频任务 | `video_store.py`、`h3_worker.py`、`video_web.py` | 任务回执、计费、媒体限制；视频持久化由 VideoStore 维护 |
-| Qwen 测试 | `qwen_lab.py`、`qwen_worker.py`、`qwen_web.py` | 不导入 H3 实现，共享文件与异常工具从底层模块取得 |
 | 图片→脚本→视频联动 | `pipeline_service.py`、`video_pipeline.py` | HTTP 只解析输入；流程由服务编排，调用 VideoStore 的公开接口 |
 | 远程执行协议 | `remote_queue.py`、`script_remote.py`；`http_api/*_workers.py` | 队列实现不导入 FastAPI；断线只对账和回传，不自动重跑 |
 | 请求模型 | `contracts/` | 不导入业务实现或页面；保留现有字段与默认值 |
@@ -58,7 +57,7 @@ flowchart TD
 ```
 
 实际允许的导入关系以根目录 `architecture.json` 为准，图只表达主要方向。
-图片、脚本、视频、Qwen 不允许彼此直接导入实现；需要共享的能力下沉到稳定底层，
+图片、脚本、视频不允许彼此直接导入实现；需要共享的能力下沉到稳定底层，
 需要联动的流程通过注入的服务或端口组织。分镜属于跨脚本/视频的编排功能，单独声明依赖。
 
 `PipelineVideoPort` 明确列出联动流程需要的视频能力。`VideoStore.pipeline_project`、
@@ -80,11 +79,13 @@ flowchart TD
 | `workbench-accounts.js` | 账号信息、空间选择、积分记录、回收站界面 |
 | `workbench-preview.js` | 图片打开/关闭、过期异步结果取消、键盘焦点恢复 |
 | `workbench-format.js` | 状态、日期、体积和耗时显示，无页面状态或网络 |
+| `workbench-prompt-enhancement.js` | 提示词强化的本地校验、请求、原文/结果对比与“使用强化版”回填；不提交生成、不扣积分 |
 
 沿用原生 `defer` 脚本，无需增加构建器。模板必须先加载组件再加载页面入口；
-页面资源版本包含这四个文件，更新组件后刷新页面即可获取新版本。
+页面资源版本包含上述全部组件文件，更新组件后刷新页面即可获取新版本。
 图片执行耗时以服务端返回值为基准，页面用单调时钟每秒更新文字；状态查询仍每 3 秒进行，
 收到响应后校准，排队、结束、状态待确认或切换任务时停止本地计时。最终耗时采用服务端记录。
+提示词强化服务只返回文本与技能来源；生成、积分和文件登记仍由既有任务链负责。
 现有图片查看、对比、脚本页、视频页和管理页仍有自己的独立文件。
 
 视频 `IWVideo` 不导出可变 state。消费者通过 `snapshot` 读取副本，用 `captureContext/isCurrent` 核对
@@ -113,7 +114,7 @@ flowchart TD
 ```
 
 可选功能为 `images`、`projects`、`accounts`、`scripts`、`storyboards`、`video`、
-`qwen`、`admin`、`storage`。修改共享底层、权限、计费、队列和恢复逻辑时运行完整回归。
+`admin`、`storage`。修改共享底层、权限、计费、队列和恢复逻辑时运行完整回归。
 
 检查包括：
 

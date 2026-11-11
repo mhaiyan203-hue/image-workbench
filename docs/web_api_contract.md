@@ -16,20 +16,29 @@ detail/list/download/recover 和手动版本入口继续按原权限与恢复合
 
 仅 localhost；同源请求。所有写操作附 `X-Workbench-CSRF`，值来自 `GET /api/config`。所有ID为32位小写十六进制；网页不传服务器路径。JSON错误为 `{detail: "可读中文摘要"}`，不返回内部异常或日志。
 
-- `GET /api/config` → `{csrf_token, backend: "codex"|"local", worker_running, max_input_images:8, max_image_bytes:20971520, max_upload_bytes:41943040, ratios:["auto","1:1","3:2","2:3"]}`。local显示“演练模式 · 不消耗生图额度”；codex显示“本地 Codex · 手动启动”。比例由提示词约束，不保证精确像素尺寸。
+- `GET /api/config` → `{csrf_token, backend: "codex"|"local"|"image-api", worker_running, max_input_images:8, max_image_bytes:20971520, max_upload_bytes:41943040, ratios:["auto","1:1","3:2","2:3"]}`。local显示演练环境；codex显示本地或远程 Codex；image-api显示“图片 API · 生成与编辑”。默认仍是 codex。Codex 比例由提示词约束；图片 API 将显式比例传为对应 size，实际产物仍做解码校验。配置接口不返回供应方地址、API Key 或私密配置路径。
+
+2026-10-23：Worker 的 `POST /api/worker/claim` 请求 `backend` 在 `codex`、`local` 基础上增加
+`image-api`。原请求与默认值兼容，仍必须与服务器当前后端匹配；接口快照仅更新该字段允许值。
+远端领取清单新增可选 `aspect_ratio`（`auto`、`1:1`、`3:2`、`2:3`），来自保存的任务选项；
+新 Worker 读取旧清单时缺省为 `auto`，旧 Worker 可忽略该新增字段。已编译的图片 Skill 提示词仍按原协议传递。
 - `GET /api/projects` → `{projects:[{project_id,name,created_at}]}`。
 - `POST /api/projects`，JSON `{request_id,name}` → Project。request_id在同一次保存意图内固定，重发不创建重复项目。
 - `GET /api/projects/{pid}/tasks` → `{tasks:[{task_id,project_id,operation,prompt,base_artifact_id,created_at,status,status_label,input_count,output_count,preview_artifact:ArtifactDTO|null}]}`，新到旧。摘要包含首张输出预览，不必逐项打开详情才能看到缩略图。
-- `POST /api/projects/{pid}/tasks`，multipart：`request_id`, `operation` generate/edit, `prompt`, `aspect_ratio` auto/1:1/3:2/2:3, `base_artifact_id`可选，`files`可重复上传。→ 完整TaskDetail。仅保存任务，不启动模型；同一request_id重发返回同一任务，不同内容冲突409。
+- `POST /api/projects/{pid}/tasks`，multipart：`request_id`, `operation` generate/edit, `prompt`, `aspect_ratio` auto/1:1/3:2/2:3, `base_artifact_id`可选，`files`可重复上传；可选 `original_prompt`（强化前的用户原文）和 `prompt_source`（JSON 字符串，见“提示词强化”）。→ 完整TaskDetail。仅保存任务，不启动模型；同一request_id重发返回同一任务，不同内容（含强化来源）冲突409。
 - `GET /api/projects/{pid}/tasks/{tid}` → TaskDetail（见下）。
 - `POST /api/projects/{pid}/tasks/{tid}/run`，JSON `{request_id,confirm_generation:true,retry_of?:job_id或last_execution_id}` → `{job_id,status}`。普通重复提交返回既有作业；失败后只有显式retry_of才能重新执行；成功任务不能再次执行，可新建任务。后端无需浏览器等待。
 - `POST /api/projects/{pid}/tasks/{tid}/restore`，JSON `{request_id,execution_id}` → `{job_id,status}`；仅恢复已验证候选归档，不调用模型。
 - `POST /api/artifacts/{aid}/approve`，JSON `{}` → ArtifactDTO；只用于输出图片，重发幂等。
 - `GET /api/artifacts/{aid}` → 已登记图片原文件，图片预览地址；`?download=1` 以附件下载。
 
-TaskDetail在任务摘要基础上增加：`inputs:[ArtifactDTO]`, `outputs:[ArtifactDTO]`, `base_image:ArtifactDTO|null`, `aspect_ratio`, `current_job:{job_id,status,created_at,started_at,finished_at}|null`, `last_execution_id`, `can_generate`, `can_retry`, `can_restore`, `error_summary`, `failure_type`, `elapsed_seconds`, `timings:{prepare_seconds,codex_seconds,validate_seconds,register_seconds,total_seconds}|null`, `executions:[{execution_id,status,created_at,failure_type,total_seconds}]`。API不返回原始stderr、命令、凭据或磁盘路径。
+TaskDetail在任务摘要基础上增加：`inputs:[ArtifactDTO]`, `outputs:[ArtifactDTO]`, `base_image:ArtifactDTO|null`, `aspect_ratio`, `original_prompt:string|null`（强化前原文；未使用强化时为null）, `prompt_source:{kind,enhancement_id,skill_id,skill_version,mode,task_type}|null`, `current_job:{job_id,status,created_at,started_at,finished_at}|null`, `last_execution_id`, `can_generate`, `can_retry`, `can_restore`, `error_summary`, `failure_type`, `elapsed_seconds`, `timings:{prepare_seconds,codex_seconds,validate_seconds,register_seconds,total_seconds}|null`, `executions:[{execution_id,status,created_at,failure_type,total_seconds}]`。API不返回原始stderr、命令、凭据或磁盘路径。
 
 ArtifactDTO：`artifact_id,project_id,task_id,kind,role,format,width,height,size_bytes,created_at,source_artifact_id,url,download_url,review_status:"pending"|"approved",reviewed_at`。
+
+2026-10-23：任务列表摘要也返回派生字段 `can_generate`，用于选择可批量提交的草稿；详情原字段不变。
+“直接生成”显式串联保存和 run，“批量生成”按所选草稿逐项调用已有 run，不新增另一套执行或积分接口。
+新增 `image_api_content_rejected` 失败类型，表示供应方明确返回 `content_policy_violation`；页面只显示固定说明。
 
 界面status：`draft`待开始、`queued`等待执行、`generating`生成中、`checking`检查产物、`awaiting_review`等待审核、`approved`已通过、`failed`执行失败、`uncertain`状态待确认。
 
@@ -39,11 +48,13 @@ ArtifactDTO：`artifact_id,project_id,task_id,kind,role,format,width,height,size
 
 持久化请求ID：保存任务的request_id跨网络重试不变；请求进行时禁用按钮。多个标签页即使request_id不同，后端也会按task_id去重执行。失败重试使用当前job_id（历史任务无job时使用last_execution_id）作为retry_of。
 
-点击任意输出“基于此图继续修改”：切换到该图所属项目，建立新的编辑草稿，将artifact_id放入base_artifact_id并展示基底预览；不直接执行。所有历史版本都可作为分支基底。
+点击任意输出“修改图片”：切换到该图所属项目，建立新的编辑草稿，将artifact_id放入base_artifact_id并展示基底预览；不直接执行。所有历史版本都可作为分支基底。
 # Asset UX 补充（2026-10-20）
 
 - `GET/POST /api/subprojects/{subproject_id}/assets` 列出或上传当前子项目图片。上传使用 multipart `files`；后台校验图片内容、每张配置上限、每批 1–9 张与 40 MiB 总量。同子项目相同内容返回已有 Artifact ID。权限仍由当前 Account/Workspace 校验。
-- `POST /api/video/projects/from-subproject` 用 `subproject_id` 获取或创建指向同一 MainProject/SubProject 的视频项目。
+- `POST /api/video/projects/from-subproject` 用 `subproject_id` 获取或创建指向同一 MainProject/SubProject 的视频项目；同一次调用是幂等的，返回的 `main_project_id`、`subproject_id` 与图片工作台共用，不复制媒体文件。
+- `POST /api/video/projects/{project_id}/bind-subproject`，JSON `{subproject_id}`：仅用于把历史独立视频项目一次性归入一个尚无视频项目的子项目。已绑定同一子项目时幂等返回；绑定其他子项目或该子项目已有视频项目时返回 409。既有镜头、任务和 MP4 不变，后续新镜头从该子项目生成。
+- 绑定子项目后的手动分镜、上传 MP4 和成功生成结果都会登记到该子项目：视频任务保存 `main_project_id`/`subproject_id`，成功 MP4 通过 `StorageManager` 登记为 Artifact，并返回 `output_artifact_id`、`output_task_id` 与 `video_version`。项目切换与只读刷新不会创建任务或冻结积分。
 - `GET/POST /api/video/projects/{project_id}/tray` 读取或调整暂存引用。POST 字段为 `artifact_id`、`media_type`、`action`（`add`/`remove`）及可选 `shot_id`；移出不删除原素材。
 - `POST /api/video/projects/{project_id}/shots/{shot_id}/clip` 以 `source_shot_id`、`artifact_id` 绑定同项目已完成视频；不能覆盖正在执行或已有成片的镜头。
 - `POST /api/scripts/tasks` 的 `quote_signature` 可省略。服务端仍从当前 Registry 计算真实价格并执行额度、模型可用性和幂等校验；若传入签名，继续校验签名有效性。旧客户端行为兼容，客户端提交的未知价格字段仍被拒绝。
@@ -72,13 +83,30 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 
 在线视频新增可选领取阶段 `stage=planning`，只由提示词执行器领取新任务；完成后调用 `/api/worker/video/jobs/{job_id}/plan`，服务端校验并保存计划，将同一任务交回 2.0 生成队列。重复提交相同计划幂等。缺省阶段为 `generation`，保留旧客户端语义。`local_h3_available` 为 false 时不接受新的本机 H3 分镜提交，旧记录和已受理任务仍可读取、恢复。
 
+## Qwen 测试功能下线（2026-10-28）
 
-## DeepSeek 与单一视频入口（2026-10-28）
+按用户要求移除 Qwen 页面、导航、静态资源、业务服务和本机执行器。`/qwen-test`、`/api/qwen/*` 和 `/api/worker/qwen/*` 不再注册；其旧接口从契约快照中明确删除。已保存的图片及历史任务文件不迁移、不删除，其他功能的权限、积分和产物接口保持原约定。
 
-脚本 config 对新网站提供 DeepSeek Flash（low/high/max），三个强度均为零积分；系统推荐固定 high，不额外调用需求分类模型。旧模板的模型默认值不能覆盖当前固定路由。生成、改写、模板/案例引用、上传/下载和版本 URL 不变。
+## 提示词强化（2026-10-31，增量接口）
 
-分镜 mode 新增 api；旧 codex 值保留为兼容别名，实际调用装配的文本 Provider。mock 仍是显式离线规则。video_model_id 新增 online-2.0；旧 h3 值和请求默认值保留供历史客户端识别，但当前生产配置拒绝新的 H3 规划/生成。新 UI 显式传 online-2.0。配置保留 H3 时长信息用于历史记录，available=false；UI 只列出可用的视频模型。default_video_model_id 表明当前新任务默认模型。
+- `POST /api/prompt-enhancements`，JSON：
+  `{request_id, prompt, mode:"standard"|"creative", task_type:"generate"|"edit"|"reference_generate", aspect_ratio?, references?:[{index,role,usage?,label?,artifact_id?}], edit?:{change_targets,preserve_targets,forbidden_changes,inherit_aspect_ratio}}`。
+  → `{schema_version, enhancement_id, request_id, status:"enhanced"|"fallback", mode, task_type, skill:{skill_id,name,version}, style?, original_prompt, enhanced_prompt, intent_summary, preserved_user_requirements, added_details, negative_constraints, edit_plan?, references, warnings, fallback:{code,message}|null, usage, source:{kind,enhancement_id,skill_id,skill_version,mode,task_type}}`。
+- 边界：`prompt` 非空且不超过4000字符；参考图不超过8张且索引不重复；编辑任务必须带 `edit_target` 或 `base` 参考图，`edit` 只允许编辑任务，`aspect_ratio` 只继承底图；多张参考图中 `role:"other"` 必须写明用途。违反返回400，且不调用模型。
+- 幂等：同一账号+Workspace内相同 `request_id` 返回缓存结果；同一ID的内容指纹不同返回409。缓存只保存本次强化结果，不跨Workspace复用。
+- 模型：公网使用 `provider:"deepseek_flash"`、官方 `deepseek-flash` 非思考模式并复用服务端文本 API 凭据；每次请求最多调用一次，离线演练显式使用 Mock。超时、空响应、格式或结构错误、编辑计划缺失、模型不可用、预算超限时返回 `status:"fallback"`、`enhanced_prompt` 等于原文，并以 `fallback.code` 标注 timeout/empty_response/invalid_json/invalid_schema/invalid_edit_plan/model_unavailable/model_error/budget_exceeded。
+- 计费与执行：本接口不修改任务状态、不写文件、不调用 ImageBackend、不冻结或扣减积分；图片生成价格不变。真实调用按账号+Workspace限制每小时/每天次数；`usage` 返回调用次数、Token（若有）以及仅在配置单价时计算的 `estimated_cost`/`currency`。
+- 溯源：用户点击“使用强化版”后，任务保存可附带 `original_prompt` 与 `prompt_source`（取自响应的 `source`）。服务端只接受固定字段，来源不合法返回400；未使用强化的任务两者均为null。
 
-视频 UI 仅列 SD2.0，API backend 仍叫 online-2.0；不改变历史磁盘标识。旧 H3 的相同请求回放保持幂等，既有已受理任务继续恢复。新 H3 分镜或新生成返回明确冲突。新增 api/online-2.0 枚举只扩大请求可解析集合，未删除旧值或改变原有字段默认值。
+## 内测反馈补充（2026-11-10）
 
-本分支同步已有 image-api 后端：worker claim backend 的匹配范围由 codex|local 扩展为 codex|local|image-api，两个旧值保持有效。HTTP 契约只更新这一已验证的 pattern 扩展；枚举扩展通过保留所有旧值的兼容检查验证。
+以下为兼容新增，不替换既有视频提交、Worker 完成或积分接口。写请求沿用登录、Workspace 与 CSRF 边界。
+
+| 方法与路径 | 请求 / 响应 | 约束 |
+| --- | --- | --- |
+| `POST /api/video/projects/{pid}/shots/{sid}/cancel` | `{job_id}` → 原视频 job 投影 | 仅所属空间；仅 queued 且无 claim；与领取共锁。重复取消幂等。已领取返回 409。内部沿用 failed 终态并退款，不新增账本状态 |
+| `GET /api/video/uncertain-jobs` | `{jobs:[...]}` | 仅有效管理员，全站未知视频；只读快照，附 backend、stage、worker_id、attempt_id、prompt_id、has_output 供核对 |
+| `POST /api/video/jobs/{job_id}/confirm-stopped` | `{confirmed:true,evidence:"核对依据"}` → job 投影 | 仅管理员，仅 uncertain 且无已上传输出或未归档的输出文件；保留操作者及依据，按既有失败结算释放冻结；重复确认幂等；不终止执行器、不重放生成 |
+| `GET /api/video/projects/{pid}/assets/{asset_id}/thumbnail` | JPEG，长边不超过 320px | 原资产身份/Workspace 校验，private 缓存；不改变原图与执行器输入 |
+
+网页提交前显示模式、参考图数、时长、尺寸与积分。T2V 有已选参考图时阻止保存，要求用户明确切换模式或取消选择。付费执行仍只有显式确认才提交原 `/run` 接口。

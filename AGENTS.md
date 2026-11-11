@@ -1,15 +1,22 @@
 # 项目维护入口
 
+## 并行开发工作区
+
+- 当前仓库根目录以 `git rev-parse --show-toplevel` 为准。聊天历史中的绝对路径可能属于迁移前的工作区，不能据此回到原目录编辑。
+- 每个开发聊天使用自己的 worktree 和分支；汇总目录为 `D:/ChatGPT/图片网站`。只在当前工作区修改代码，合并时检查源分支和目标分支。
+- 开发数据、虚拟环境和网页端口分别配置；若存在 `work/worktree-info.json`，先读该文件获取本工作区信息。开发网页用 `work/start-web.ps1` 启动。
+- 本机业务数据、执行器凭据及历史报告保留在原目录；测试继续使用临时数据与 Mock 后端。详见 [并行开发说明](docs/parallel_development.md)。
+
 项目结构与模块依赖以 [docs/architecture.md](docs/architecture.md) 和
 [architecture.json](architecture.json) 为准。HTTP/数据/执行行为分别参见
 [Web 接口](docs/web_api_contract.md)、[存储契约](docs/storage_contract.md)、
 [执行契约](docs/execution_contract.md)；这些文档不代表生产服务的实时状态。
 
 - 完整检查：`.venv\Scripts\python.exe -X utf8 scripts\verify.py`。
-- 单功能检查：加 `--module images|projects|accounts|scripts|storyboards|video|qwen|admin|storage`。
+- 单功能检查：加 `--module images|projects|accounts|scripts|storyboards|video|prompt|admin|storage`。
   模块检查同时运行公共接口、请求边界及前端组件检查；发布前执行完整检查。
 - 新模块在 `architecture.json` 声明归属。业务模块不导入 HTTP 适配层，图片、
-  脚本、视频、Qwen 不通过彼此的私有实现共享工具。跨功能流程使用明确服务接口。
+  脚本、视频不通过彼此的私有实现共享工具。跨功能流程使用明确服务接口。
 - 全站服务由 `image_workbench/composition.py` 装配；`web.py` 保留兼容入口。
   页面安装函数接收服务，模型执行保留在已有持久队列和 Worker。
 - 变更不得隐式改变 URL、磁盘格式、Workspace 权限、积分事务、提交幂等或恢复规则。
@@ -44,8 +51,5 @@
 不能用动态导入、入口重导出或反射规避依赖规则。细则见
 [质量检查](docs/architecture/QUALITY_GATES.md)、
 [插件试点](docs/architecture/PLUGIN_PILOT.md)、
-[并行开发](docs/parallel_development.md)。
-
-## 并行开发
-
-每个任务使用独立 worktree 和分支，以 `git rev-parse --show-toplevel` 确认当前目录；聊天历史中的路径不能代替当前目录。每个工作区使用独立环境、数据目录和端口。完成验证后推送功能分支，通过 Pull Request 合并到 `main`。
+[当前架构](docs/architecture/CURRENT_ARCHITECTURE.md) 与
+[技术债优先级](docs/architecture/TECHNICAL_DEBT.md)。

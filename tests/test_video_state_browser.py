@@ -28,6 +28,42 @@ class VideoStateBrowserTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
+    def test_video_confirmation_cancel_and_reference_conflict(self):
+        asset = self.post(f"/api/video/projects/{self.pid}/assets", files={"files": ("red.png", png(), "image/png")})["assets"][0]
+        self.video()
+        self.page.locator('[data-pipeline-step="video"]').click()
+        self.page.locator('#videoShotName').fill('确认测试')
+        self.page.locator('#videoShotPrompt').fill('合成画面，不调用模型')
+        self.page.locator('#videoMode').select_option('R2V')
+        self.page.evaluate("id => window.IWVideo.setReferences([id], {mode:'R2V'})", asset['asset_id'])
+        self.page.locator('#videoMode').select_option('T2V')
+        self.page.locator('#videoShotForm button[type=submit]').click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('不会生效')
+        self.assertEqual(self.get(f"/api/video/projects/{self.pid}")["shots"], [])
+        self.page.get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        self.page.locator('#videoShotForm button[type=submit]').click()
+        run = self.page.locator('#videoShots .primary-button').first
+        expect(run).to_be_visible()
+        dialogs = []
+        def reject(dialog):
+            dialogs.append(dialog.message)
+            dialog.dismiss()
+        self.page.once('dialog', reject)
+        run.click()
+        self.assertIn('T2V', dialogs[0])
+        for label in ('参考图：0', '时长：5', '分辨率：720p', '将冻结：'):
+            self.assertIn(label, dialogs[0])
+        self.assertEqual(self.app.video_store._jobs(), [])
+        self.page.once('dialog', lambda dialog: dialog.accept())
+        run.click()
+        cancel = self.page.get_by_role('button', name='取消排队 · 释放冻结积分', exact=True)
+        expect(cancel).to_be_visible()
+        cancel.click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('冻结积分已释放')
+        self.assertEqual(self.app.identity.wallet(self.aid)['frozen_credit'], 0)
+        self.assertEqual(self.app.identity.wallet(self.aid)['used_credit'], 0)
+        self.page.screenshot(path=str(fixtures.SCREENSHOTS / 'beta-video-confirmation.png'), full_page=True)
+
     def tearDown(self):
         self.assertEqual(self.errors, [])
         self.model.generate.assert_not_called()
@@ -54,11 +90,11 @@ class VideoStateBrowserTests(unittest.TestCase):
         expect(self.page.locator('[data-pipeline-pane="image:upload"]')).to_be_visible()
         self.page.locator("#videoAssets").set_input_files(self.files("red"))
         self.idle()
-        expect(self.page.locator("#videoAssetGrid img")).to_have_count(1)
+        expect(self.page.locator("#pipelineImageReferences img")).to_have_count(1)
         self.assertTrue(self.event("drop", ("blue",), '[data-pipeline-pane="image:upload"]'))
         self.idle()
-        expect(self.page.locator("#videoAssetGrid img")).to_have_count(2)
-        self.page.wait_for_function("() => [...document.querySelectorAll('#videoAssetGrid img')].every(img => img.complete && img.naturalWidth > 0)")
+        expect(self.page.locator("#pipelineImageReferences img")).to_have_count(2)
+        self.page.wait_for_function("() => [...document.querySelectorAll('#pipelineImageReferences img')].every(img => img.complete && img.naturalWidth > 0)")
         new_pid = self.page.evaluate("() => window.IWVideo.snapshot().project.project_id")
         self.assertNotEqual(new_pid, self.pid)
         self.assertEqual(self.app.identity.wallet(self.aid)["remaining_credit"], 200)
@@ -73,8 +109,11 @@ class VideoStateBrowserTests(unittest.TestCase):
         expect(self.page.locator("#videoProjectList .video-project-button")).to_have_count(0)
         self.post(f"/api/project-actions/{mid}/restore", json={})
         self.page.reload(wait_until="networkidle")
-        expect(self.page.locator("#videoAssetGrid img")).to_have_count(1)
-        self.page.wait_for_function("() => document.querySelector('#videoAssetGrid img')?.naturalWidth > 0")
+        expect(self.page.locator("#pipelineImageReferences img")).to_have_count(0)
+        self.page.locator("#videoAssets").set_input_files(self.files("red"))
+        self.idle()
+        expect(self.page.locator("#pipelineImageReferences img")).to_have_count(1)
+        self.page.wait_for_function("() => document.querySelector('#pipelineImageReferences img')?.naturalWidth > 0")
         self.assertEqual(self.page.evaluate("() => window.IWVideo.snapshot().project.assets[0].asset_id"), asset["asset_id"])
 
     def select(self, pid):
@@ -101,19 +140,73 @@ class VideoStateBrowserTests(unittest.TestCase):
         self.video()
         self.page.locator('[data-pipeline-step="video"]').click()
         self.page.locator('#videoMode').select_option('I2V')
-        self.page.locator('#videoReferenceChoices input').first.check()
+        self.assertTrue(self.event('drop', ('red',), '#videoShotForm'))
+        self.idle()
+        expect(self.page.locator('#videoReferenceChoices input').first).to_be_checked()
         self.page.locator('#videoBackend').select_option('online-2.0')
         expect(self.page.locator('#videoMode')).to_have_value('T2V')
         expect(self.page.locator('#videoMode')).to_be_disabled()
         self.page.locator('#videoShotName').fill('在线测试草稿')
         self.page.locator('#videoShotPrompt').fill('红色纸片缓慢旋转')
         self.page.locator('#videoShotForm button[type="submit"]').click()
-        expect(self.page.locator('#videoNotice')).to_contain_text('分镜已保存')
-        shot = self.get(f"/api/video/projects/{self.pid}")['shots'][-1]
-        self.assertEqual((shot['backend'], shot['mode'], shot['reference_ids']), ('online-2.0', 'T2V', []))
+        expect(self.page.locator('#videoNotice')).to_contain_text('不会生效')
+        self.assertEqual(self.get(f"/api/video/projects/{self.pid}")['shots'], [])
         self.page.locator('#videoBackend').select_option('h3')
         expect(self.page.locator('#videoMode')).to_have_value('I2V')
         self.assertTrue(self.page.locator('#videoReferenceChoices input').first.is_checked())
+        self.page.locator('#videoBackend').select_option('online-2.0')
+        self.page.get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        self.page.locator('#videoShotForm button[type="submit"]').click()
+        expect(self.page.locator('#videoNotice')).to_contain_text('分镜已保存')
+        shot = self.get(f"/api/video/projects/{self.pid}")['shots'][-1]
+        self.assertEqual((shot['backend'], shot['mode'], shot['reference_ids']), ('online-2.0', 'T2V', []))
+    def test_project_tree_navigation_uses_shared_main_subprojects_without_starting_jobs(self):
+        self.video()
+        expect(self.page.locator("#videoProjectList")).to_contain_text("浏览器项目 A")
+        expect(self.page.locator("#videoProjectList")).to_contain_text("未分类任务")
+
+        with self.page.expect_response(lambda response: response.url.endswith("/api/main-projects")
+                                       and response.request.method == "POST") as created:
+            self.page.locator("#newVideoProject").click()
+            self.page.locator("#videoProjectDialogName").fill("浏览器品牌 B")
+            self.page.locator("#videoProjectDialogSubmit").click()
+        main = created.value.json()
+        main_id = main["main_project_id"]
+        self.page.wait_for_function("id => window.IWVideo.snapshot().mainProjectId === id", arg=main_id)
+        group = self.page.locator(".project-tree-group").filter(has_text="浏览器品牌 B")
+        expect(group).to_be_visible()
+
+        with self.page.expect_response(lambda response: response.url.endswith("/subprojects")
+                                       and response.request.method == "POST") as sub_created:
+            group.locator(".project-child-add").click()
+            self.page.locator("#videoProjectDialogName").fill("秋季宣传片")
+            self.page.locator("#videoProjectDialogSubmit").click()
+        sub_id = sub_created.value.json()["subproject_id"]
+        self.page.wait_for_function("id => window.IWVideo.snapshot().subprojectId === id", arg=sub_id)
+        expect(self.page.locator("#videoActiveName")).to_have_text("秋季宣传片")
+        self.assertIn("subproject=" + sub_id, self.page.url)
+
+        sub_row = group.locator(".project-child-row").filter(has_text="秋季宣传片")
+        with self.page.expect_response(lambda response: response.url.endswith(f"/api/subprojects/{sub_id}")
+                                       and response.request.method == "PATCH"):
+            sub_row.locator(".project-sub-options").click()
+            self.page.locator("#videoProjectDialogName").fill("秋季成片")
+            self.page.locator("#videoProjectDialogSubmit").click()
+        expect(self.page.locator("#videoProjectList")).to_contain_text("秋季成片")
+        self.page.wait_for_function("id => window.IWVideo.snapshot().subprojectId === id", arg=sub_id)
+
+        with self.page.expect_response(lambda response: response.url.endswith(f"/api/main-projects/{main_id}")
+                                       and response.request.method == "PATCH"):
+            group.locator(".project-options").click()
+            self.page.locator("#videoProjectDialogName").fill("浏览器品牌 2026")
+            self.page.locator("#videoProjectDialogSubmit").click()
+        expect(self.page.locator("#videoProjectList")).to_contain_text("浏览器品牌 2026")
+
+        self.page.locator(".project-tree-group").filter(has_text="浏览器项目 A").locator(".project-item").click()
+        self.page.wait_for_function("id => window.IWVideo.snapshot().project?.project_id === id", arg=self.pid)
+        expect(self.page.locator("#videoActiveName")).to_have_text("浏览器项目 A")
+        self.assertEqual(self.app.video_store._jobs(), [])
+        self.assertEqual(self.app.identity.wallet(self.aid)["used_credit"], 0)
 
     def test_snapshots_and_events_cannot_mutate_state_and_reference_order_is_owned(self):
         assets = self.post(f"/api/video/projects/{self.pid}/assets", files=[
@@ -182,7 +275,7 @@ class VideoStateBrowserTests(unittest.TestCase):
         pending[0].fulfill(json=old)
         self.assertIsNone(self.page.evaluate("() => window.pendingRefresh"))
         self.assertEqual(len(self.page.evaluate("() => window.IWVideo.snapshot().project.assets")), 1)
-        expect(self.page.locator("#videoAssetCount")).to_have_text("1 张")
+        expect(self.page.locator("#videoAssetCount")).to_have_text("0 张")
 
     def test_late_shot_save_preserves_newer_form_edits(self):
         self.video()

@@ -138,9 +138,9 @@ class ImageTimerBrowserTests(unittest.TestCase):
         expect(self.timer).to_have_text("生成中 · 已运行 1 秒")
         self.detail.update(status="uncertain", elapsed_seconds=None, execution_seconds=None)
         self.poll()
-        expect(self.timer).to_have_text("执行状态待确认 · 最终耗时暂不可用")
+        expect(self.timer).to_have_text("执行结果未知 · 需核对 · 最终耗时暂不可用")
         self.page.clock.run_for(1000)
-        expect(self.timer).to_have_text("执行状态待确认 · 最终耗时暂不可用")
+        expect(self.timer).to_have_text("执行结果未知 · 需核对 · 最终耗时暂不可用")
 
     def test_switch_and_reload_use_selected_task_and_ignore_late_old_response(self):
         first = self.task("任务 A")

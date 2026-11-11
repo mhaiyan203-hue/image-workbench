@@ -495,6 +495,154 @@ class VideoTests(unittest.TestCase):
             client.headers["X-Workbench-CSRF"] = csrf
         return client
 
+    def test_cancel_and_operator_recovery_preserve_billing_and_claim_boundaries(self):
+        self.store.set_config(self.admin, {"720p": 2, "1080p": 4})
+        shot = self.shot()
+        job = self.submit(shot)
+        with self.assertRaises(FileNotFoundError):
+            self.store.cancel_queued(self.bid, self.bwid, self.pid, shot["shot_id"], job["job_id"])
+        for _ in range(2):
+            self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], job["job_id"])
+        self.assertEqual(self.wallet()["frozen_credit"], 0)
+        self.assertEqual(self.wallet()["used_credit"], 0)
+        self.assertIsNone(self.store.claim(uid()))
+        next_job = self.submit(shot, retry_of=job["job_id"])
+        worker = uid()
+        claimed = self.store.claim(worker)
+        with self.assertRaises(ConflictError):
+            self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], next_job["job_id"])
+        self.store.start(next_job["job_id"], worker, claimed["claim_id"], uid())
+        self.store.complete(next_job["job_id"], worker, claimed["claim_id"], "uncertain")
+        with self.assertRaises(PermissionError):
+            self.store.confirm_video_stopped(self.aid, next_job["job_id"], confirmed=True, evidence="检查")
+        for _ in range(2):
+            self.store.confirm_video_stopped(self.admin, next_job["job_id"], confirmed=True, evidence="合成测试：已核实执行停止且无输出")
+        self.assertEqual(self.wallet()["frozen_credit"], 0)
+        self.assertEqual(self.wallet()["used_credit"], 0)
+        with self.assertRaises(ConflictError):
+            self.store.start(next_job["job_id"], worker, claimed["claim_id"], uid())
+        self.assertIsNone(self.store.claim(uid()))
+
+    def test_operator_cannot_refund_uploaded_uncertain_result(self):
+        shot, job, worker, claim = self.ready()
+        data = mp4()
+        self.store.upload_output(job["job_id"], worker, claim, data, hashlib.sha256(data).hexdigest())
+        self.store.complete(job["job_id"], worker, claim, "uncertain")
+        with self.assertRaises(ConflictError):
+            self.store.confirm_video_stopped(self.admin, job["job_id"], confirmed=True, evidence="已停止")
+        self.assertEqual(self.wallet()["frozen_credit"], 10)
+
+    def test_cancel_claim_race_has_one_winner_and_no_duplicate_refund(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        self.store.set_config(self.admin, {"720p": 2, "1080p": 4})
+        for _ in range(4):
+            shot = self.shot()
+            job = self.submit(shot)
+            barrier = Barrier(2)
+            worker = uid()
+            def cancel(barrier=barrier, shot=shot, job=job):
+                barrier.wait(timeout=5)
+                try:
+                    return self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], job["job_id"])
+                except ConflictError:
+                    return None
+            def claim(barrier=barrier, worker=worker):
+                barrier.wait(timeout=5)
+                return self.store.claim(worker)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                cancelled, claimed = pool.submit(cancel), pool.submit(claim)
+                cancelled, claimed = cancelled.result(), claimed.result()
+            self.assertNotEqual(cancelled is None, claimed is None)
+            if claimed:
+                self.assertEqual(self.wallet()["frozen_credit"], 10)
+                self.store.complete(job["job_id"], worker, claimed["claim_id"], "failed", error="Mock stopped before submit")
+            else:
+                self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], job["job_id"])
+            self.assertEqual(self.wallet()["frozen_credit"], 0)
+            self.assertEqual(self.wallet()["used_credit"], 0)
+
+    def test_operator_snapshot_is_read_only_and_preserves_unrecorded_upload(self):
+        _, job, worker, claim = self.ready()
+        self.store.complete(job["job_id"], worker, claim, "uncertain")
+        self.store._path("outputs", job["job_id"] + ".mp4").write_bytes(mp4())
+        with patch.object(self.identity, "record_job", side_effect=AssertionError("Read-only query must not settle")):
+            rows = self.store.uncertain_jobs(self.admin)
+        self.assertTrue(rows[0]["has_output"])
+        with self.assertRaises(ConflictError):
+            self.store.confirm_video_stopped(self.admin, job["job_id"], confirmed=True, evidence="Mock stopped")
+        self.assertEqual(self.wallet()["frozen_credit"], 10)
+
+    def test_cancel_recovers_settlement_and_online_planning_claim_is_protected(self):
+        self.store.set_config(self.admin, {"720p": 2, "1080p": 4})
+        shot = self.shot(backend="online-2.0")
+        job = self.submit(shot)
+        with patch.object(self.identity, "record_job", side_effect=OSError("Mock interrupted settlement")):
+            with self.assertRaises(OSError):
+                self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], job["job_id"])
+        self.assertEqual(self.wallet()["frozen_credit"], 10)
+        self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], job["job_id"])
+        self.assertEqual(self.wallet()["frozen_credit"], 0)
+        retry = self.submit(shot, retry_of=job["job_id"])
+        worker = uid()
+        self.store.claim(worker, "online-2.0", "planning")
+        with self.assertRaises(ConflictError):
+            self.store.cancel_queued(self.aid, self.wid, self.pid, shot["shot_id"], retry["job_id"])
+        self.assertEqual(self.wallet()["frozen_credit"], 10)
+
+    def test_operator_http_requires_admin_csrf_and_explicit_evidence(self):
+        _, job, worker, claim = self.ready()
+        self.store.complete(job["job_id"], worker, claim, "uncertain")
+        app = create_app(self.storage, backend="local")
+        user = self.http_client(app, self.aid, self.wid)
+        admin = self.http_client(app, self.admin, self.identity.workspaces(self.admin)[0]["workspace_id"])
+        url = f"/api/video/jobs/{job['job_id']}/confirm-stopped"
+        body = {"confirmed": True, "evidence": "Mock: checked original execution stopped with no output"}
+        self.assertEqual(user.post(url, json=body).status_code, 403)
+        for extra in ({"confirmed": False}, {"evidence": ""}):
+            self.assertEqual(admin.post(url, json={**body, **extra}).status_code, 422)
+        self.assertEqual(admin.post(url, json={**body, "evidence": "   "}).status_code, 400)
+        csrf = admin.headers.pop("X-Workbench-CSRF")
+        self.assertEqual(admin.post(url, json=body).status_code, 403)
+        admin.headers["X-Workbench-CSRF"] = csrf
+        jobs = admin.get("/api/video/uncertain-jobs").json()["jobs"]
+        self.assertEqual(jobs[0]["worker_id"], worker)
+        for _ in range(2):
+            self.assertEqual(admin.post(url, json=body).status_code, 200)
+        self.assertEqual(self.wallet()["frozen_credit"], 0)
+        self.assertEqual(self.wallet()["used_credit"], 0)
+        record = self.store._read(self.store._job_path(job["job_id"]))
+        self.assertEqual(record["stop_evidence"], body["evidence"])
+        self.assertEqual(record["stopped_by"], self.admin)
+        self.assertEqual(record["worker_id"], worker)
+
+    def test_feedback_http_contract_and_thumbnail_isolation(self):
+        app = create_app(self.storage, backend="local")
+        alice = self.http_client(app, self.aid, self.wid)
+        other = self.http_client(app, self.bid, self.bwid)
+        admin = self.http_client(app, self.admin, self.identity.workspaces(self.admin)[0]["workspace_id"])
+        self.assertEqual(alice.get("/api/video/uncertain-jobs").status_code, 403)
+        self.assertEqual(admin.get("/api/video/uncertain-jobs").json(), {"jobs": []})
+        stream = io.BytesIO()
+        Image.new("RGB", (2400, 1600), "blue").save(stream, "PNG")
+        asset = self.store.add_assets(self.aid, self.wid, self.pid, [("large.png", stream.getvalue())])[0]
+        url = f"/api/video/projects/{self.pid}/assets/{asset['asset_id']}/thumbnail"
+        response = alice.get(url)
+        self.assertEqual(response.status_code, 200)
+        with Image.open(io.BytesIO(response.content)) as thumb:
+            self.assertEqual(thumb.size, (320, 213))
+        self.assertLess(len(response.content), len(stream.getvalue()))
+        self.assertEqual(other.get(url).status_code, 404)
+        self.store.set_config(self.admin, {"720p": 2, "1080p": 4})
+        shot = self.shot()
+        job = self.submit(shot)
+        cancel = f"/api/video/projects/{self.pid}/shots/{shot['shot_id']}/cancel"
+        self.assertEqual(alice.post(cancel, json={}).status_code, 422)
+        self.assertEqual(other.post(cancel, json={"job_id": job["job_id"]}).status_code, 404)
+        self.assertEqual(alice.post(cancel, json={"job_id": job["job_id"]}).status_code, 200)
+        self.assertEqual(alice.post(cancel, json={"job_id": job["job_id"]}).status_code, 200)
+        self.assertEqual(self.wallet()["frozen_credit"], 0)
+
     def test_http_auth_price_workspace_and_worker_protocol(self):
         access = RemoteAccess("http://localhost", "v" * 48)
         app = create_app(self.storage, backend="local", remote_access=access)

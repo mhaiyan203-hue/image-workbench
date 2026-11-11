@@ -162,14 +162,55 @@ class AssetBrowserTests(unittest.TestCase):
     def selected_root_assets(self, count):
         expect(self.page.locator("#filePreviewList .file-tile")).to_have_count(count)
 
-    def save_root_task(self):
+    def save_root_task(self, *, generate=True):
+        if not generate:
+            with self.page.expect_response(lambda response: response.request.method == "POST"
+                                           and response.url.endswith(f"/api/subprojects/{self.link['subproject_id']}/tasks")) as saved:
+                self.page.locator("#saveDraftTaskButton").click()
+            self.assertEqual(saved.value.status, 200, saved.value.text())
+            expect(self.page.locator("#promptInput")).to_have_value("")
+            return saved.value.json()
         with self.page.expect_response(lambda response: response.request.method == "POST"
                                        and response.url.endswith(f"/api/subprojects/{self.link['subproject_id']}/tasks")) as saved:
-            self.page.locator("#saveTaskButton").click()
+            with self.page.expect_response(lambda response: response.request.method == "POST"
+                                           and "/api/tasks/" in response.url
+                                           and response.url.endswith("/run")) as submitted:
+                self.page.locator("#saveTaskButton").click()
         response = saved.value
         self.assertEqual(response.status, 200, response.text())
+        run_response = submitted.value
+        self.assertEqual(run_response.status, 200, run_response.text())
+        self.last_run = run_response.json()
         expect(self.page.locator("#promptInput")).to_have_value("")
         return response.json()
+
+    def test_current_task_references_drop_remove_and_hidden_libraries(self):
+        self.video()
+        self.page.locator('[data-pipeline-tab="image"][data-mode="upload"]').click()
+        expect(self.page.locator('#assetTray')).to_be_hidden()
+        expect(self.page.locator('#videoAssetGrid')).to_be_hidden()
+        expect(self.page.locator('#pipelineChooseImages')).to_be_hidden()
+        self.assertTrue(self.event('drop', ('red', 'blue'), '#pipelineImages'))
+        self.idle()
+        expect(self.page.locator('#pipelineImageReferences input:checked')).to_have_count(2)
+        self.page.locator('#pipelineImageReferences').get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        expect(self.page.locator('#pipelineImageReferences img')).to_have_count(1)
+        expect(self.page.locator('#videoAssetCount')).to_have_text('1 张')
+        # Polling must not repopulate the current selection from archived assets.
+        self.page.evaluate('() => window.IWVideo.refresh()')
+        expect(self.page.locator('#pipelineImageReferences img')).to_have_count(1)
+        self.assertEqual(len(self.get(f'/api/video/projects/{self.pid}')['assets']), 2)
+        self.page.locator('[data-pipeline-step="video"]').click()
+        self.assertTrue(self.event('drop', ('red', 'blue', 'green'), '#videoShotForm'))
+        self.idle()
+        expect(self.page.locator('#videoReferenceChoices input:checked')).to_have_count(3)
+        self.page.locator('#videoMode').select_option('I2V')
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        expect(self.page.locator('#videoReferenceChoices img')).to_have_count(2)
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 blue.png', exact=True).click()
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 green.png', exact=True).click()
+        expect(self.page.locator('#videoReferenceChoices img')).to_have_count(0)
+        self.assertEqual(self.page.evaluate('() => window.IWVideo.snapshot().referenceOrder'), [])
 
     def test_video_paste_upload_drop_deduplicate_and_artifact(self):
         self.video()
@@ -278,6 +319,8 @@ class AssetBrowserTests(unittest.TestCase):
         self.assertEqual(len(detail["inputs"]), 3)
         self.assertEqual({self.client.get(item["url"]).content for item in detail["inputs"]},
                          {png("red"), png("blue"), png("green")})
+        self.assertEqual(self.last_run["status"], "queued")
+        self.assertEqual(len(self.app.state.workbench.list_jobs()), 1)
         self.selected_root_assets(0)
 
     def test_root_edit_paste_sets_base_preserves_references_and_saves(self):
@@ -304,6 +347,8 @@ class AssetBrowserTests(unittest.TestCase):
         self.assertTrue(detail["base_artifact_id"])
         self.assertIn(detail["base_artifact_id"], base_url)
         self.assertEqual(detail["input_count"], 2)
+        self.assertEqual(self.last_run["status"], "queued")
+        self.assertEqual(len(self.app.state.workbench.list_jobs()), 1)
 
     def test_root_upload_and_save_network_failures_retain_draft_and_retry(self):
         self.root_page()
@@ -321,13 +366,16 @@ class AssetBrowserTests(unittest.TestCase):
         task_route = f"**/api/subprojects/{self.link['subproject_id']}/tasks"
         self.page.route(task_route, lambda route: route.abort("failed") if route.request.method == "POST" else route.continue_())
         self.page.locator("#saveTaskButton").click()
-        expect(self.page.locator("#formMessage")).to_contain_text("可再次保存以重试")
+        expect(self.page.locator("#formMessage")).to_contain_text("可再次提交以重试")
+        self.assertEqual(self.app.state.workbench.list_jobs(), [])
         self.selected_root_assets(1)
         expect(self.page.locator("#promptInput")).to_have_value("网络失败后仍要保留")
         self.page.unroute(task_route)
         task = self.save_root_task()
         self.assertEqual(task["input_count"], 1)
         self.assertEqual(task["prompt"], "网络失败后仍要保留")
+        self.assertEqual(self.last_run["status"], "queued")
+        self.assertEqual(len(self.app.state.workbench.list_jobs()), 1)
         saved = self.get(f"/api/subprojects/{self.link['subproject_id']}/tasks")["tasks"]
         self.assertEqual(len([item for item in saved if item["prompt"] == task["prompt"]]), 1)
 

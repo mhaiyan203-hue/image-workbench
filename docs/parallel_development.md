@@ -1,47 +1,42 @@
-# Worktree 并行开发与 GitHub 同步
+# Worktree 并行开发
 
-一个功能任务对应一个工作目录和分支。各 worktree 共享提交历史，文件修改互相独立；完成的代码通过 Pull Request 汇入 `main`。
+每个开发聊天有独立的 Git 工作目录和分支，均从同一份已提交的代码基线开始。
+原目录 `D:/ChatGPT/图片网站` 用于汇总代码和既有业务运行。
 
-## 创建工作区
+## 进入工作区
 
-在现有仓库运行，功能名和路径按实际任务调整：
+以聊天当前工作目录及 `git rev-parse --show-toplevel` 为准，不沿用聊天历史中的原目录绝对路径。
+`work/worktree-info.json` 记录本工作区的聊天、分支、端口、开发数据目录与基线提交。
 
-```powershell
-git fetch origin
-git worktree add -b feature/example ../image-workbench-example origin/main
-Set-Location ../image-workbench-example
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m playwright install chromium
-```
-
-Windows 使用较短的目录，避免任务记录和测试临时文件触及系统路径长度限制。
-以 `git rev-parse --show-toplevel` 确认当前目录。每个工作区安装自己的依赖，并使用独立数据目录和端口：
+每个工作区使用自己的 `.venv`；现有全局 Python 包可能通过 `system-site-packages` 只读复用。
+后续安装项目依赖时使用 `.\.venv\Scripts\python.exe -m pip`，不要修改共享全局环境。
 
 ```powershell
-.\.venv\Scripts\python.exe -m image_workbench --data-root work/dev-data web --backend local --port 7871
+# 按功能验证；完整回归省略 --module。
+.\.venv\Scripts\python.exe -X utf8 scripts\verify.py --module images
+
+# 使用本工作区预留端口、独立开发数据及 local 后端启动网页。
+.\work\start-web.ps1
 ```
 
-其他工作区使用 7872、7873 等空闲端口。`local` 图片后端需要通过 `--image` 指定自己准备的测试图片才能演练生成；普通页面预览可不指定图片。
-worktree 不隔离 GPU、外部模型服务或系统进程，真实执行器仍按既有队列与锁管理。
+启动脚本使用 `--backend local`，不启动真实图片或视频执行器。初次启动的开发账号和数据为空。
+需要真实模型联调时，另行配置对应环境并遵守任务授权；不要把运行中的原目录 `data/` 接到开发工作区。
+所有工作区仍位于同一台电脑，GPU、系统进程和外部服务不会因 worktree 自动隔离。
 
-## 验证、推送与合并
+## 提交和汇总
 
-```powershell
-# 单功能检查；提交涉及公共服务的变更前运行完整检查。
-.\.venv\Scripts\python.exe -X utf8 scripts/verify.py --module scripts
-.\.venv\Scripts\python.exe -X utf8 scripts/verify.py
+1. 在当前工作区完成修改与受影响功能检查，提交到本工作区分支。
+2. 汇总前确认原目录当前分支和未提交改动；将已验证的功能分支合并到汇总分支。
+3. 不同分支改到相同代码时仍可能出现合并冲突；解决后重新验证受影响路径。
+4. 同步其他已合并功能时，在本工作区合并最新汇总分支。
 
-git status --short
-git add <本次修改的文件>
-git commit -m "Describe the completed change"
-git push -u origin HEAD
-```
+worktree 是独立工作目录，不是自动同步机制。需要发布时仍单独执行项目既有发布流程。
 
-在 GitHub 创建以 `main` 为目标的 Pull Request，确认差异与检查结果后合并。
-其他工作区需要同步时，先保存当前改动，再执行 `git fetch origin` 和 `git merge origin/main`；有冲突时解决冲突并重新验证受影响功能。
+## 本地文件范围
 
-业务数据、登录凭据、部署配置、模型权重和生成结果遵循现有 `.gitignore`，使用私下配置方式分发。
-本仓库用 `.gitattributes` 保留原始字节，避免模板的 SHA-256 因换行转换失效。
+Git 基线包含源码、测试、配置示例、技能、文档和空数据目录占位文件。
+`work/`、`reports/`、`交付/`、虚拟环境、业务数据、缓存与本机凭据不进入基线；原文件保留在原目录。
+文档中指向历史报告或旧工作记录的链接，应在原目录查看。
 
-GitHub 代码同步与服务器部署是独立操作。历史发布清单只用于核对对应冻结版本；新的代码合并后仍需按部署流程单独发布和验收。
+`skills/` 内的模板和参考素材包含按原始字节登记的 SHA-256；`.gitattributes` 禁止 Git 自动转换这些资源的换行符。
+浏览器测试生成的 `docs/goals/asset-ux/browser-*.json` 和 `screenshots/` 也仅保留在本机，不参与代码合并。

@@ -58,9 +58,28 @@ class OnlineVideoWorker:
             body = {'prompt': task['prompt'], 'mode': '2.0', 'ratio': {'landscape': '16:9', 'portrait': '9:16', 'square': '1:1'}[task['aspect_ratio']], 'durationSeconds': task['duration']}
             try:
                 response = self.provider('POST', '/v1/videos/generations', json=body)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                journal['submission_diagnostic'] = {'transport_error': type(exc).__name__}
+                self.save(path, journal)
                 self.transport.complete(manifest, {'status': 'uncertain', 'error': '供应商提交结果未知，未自动重复提交'})
                 return
+            journal['submission_diagnostic'] = {'http_status': response.status_code}
+            self.save(path, journal)
+            if response.status_code == 503:
+                try:
+                    rejection = response.json()
+                except ValueError:
+                    rejection = None
+                # This explicit admission rejection was observed from the provider.
+                # Other 5xx responses can follow acceptance and remain uncertain.
+                if (isinstance(rejection, dict) and rejection.get('code') == 'QUOTA_EXCEEDED'
+                        and rejection.get('message') == '当前算力已满，请稍后重试'
+                        and not rejection.get('id')):
+                    journal.update(phase='rejected', rejection_reason='供应商当前算力已满，任务未受理，请稍后手动重试')
+                    journal['submission_diagnostic']['provider_code'] = 'QUOTA_EXCEEDED'
+                    self.save(path, journal)
+                    self.transport.complete(manifest, {'status': 'failed', 'error': journal['rejection_reason']})
+                    return
             if 400 <= response.status_code < 500 and response.status_code not in {408, 429}:
                 journal['phase'] = 'rejected'
                 self.save(path, journal)
@@ -82,7 +101,7 @@ class OnlineVideoWorker:
             self.transport.complete(manifest, {'status': 'uncertain', 'error': '提交结果未知，未自动重复提交'})
             return
         if journal['phase'] == 'rejected':
-            self.transport.complete(manifest, {'status': 'failed', 'error': '供应商拒绝任务'})
+            self.transport.complete(manifest, {'status': 'failed', 'error': journal.get('rejection_reason', '供应商拒绝任务')})
             return
         self.transport.start(manifest, attempt, journal['provider_id'])
         output_path = self.journal_dir / (job_id + '.mp4')

@@ -9,7 +9,16 @@
 
 本阶段仍是可信本地脚本、单进程顺序调用，不提供网页或账号权限。
 执行链固定为 `TaskRunner → ImageBackend → 本次产物 → StorageManager`。
-不调用额外付费图片 API，不自动重试生成，不修改 Codex 全局配置或登录方式。
+默认 Codex 后端不调用额外付费图片 API，不自动重试生成，不修改 Codex 全局配置或登录方式。
+2026-10-23 新增显式选择的 `image-api` 后端；配置、付费调用边界和验证状态见
+[图片 API 接入](image_api_integration.md)。旧后端与默认值保留。
+
+图片 API 的重试扩展（2026-10-23）：用户明确授权相同内容失败重试，Provider 在一次执行内
+对明确可重试的响应及连接建立失败最多尝试 3 次；固定同一请求正文，总时限包含等待和全部尝试。
+`api-request.json` 增加 `max_attempts`、`request_sha256`，`api-response.json` 增加尝试数组及次数。
+不新建 Task、Execution 或积分预约，成功后结算一次，全失败时按原规则退款。鉴权/参数错误、
+结果未知的传输失败、成功响应的无效产物不自动再生成；重启恢复仍只重传原结果。
+并发仅启用原远程队列的执行位配置和独立 Worker 实例，不改变数据格式、归属、幂等或恢复规则。
 
 ## 接口（独立测试据此编写）
 
@@ -200,16 +209,8 @@ StoryboardService 接收脚本源版本读取函数；任务事务、模型执�
 
 在线执行器属于视频模块的 Provider 执行端，通过既有视频服务、存储和账本接口协作，不修改共享 Core。分镜新增的可选 `backend` 不要求迁移历史记录；旧记录按 H3 解释。回滚前应停止接收新的在线任务并处理已受理任务，再停用在线执行器并回退代码；保留其 journal 和原任务结果作为恢复证据。
 
-## DeepSeek 文本执行与 SD2.0 Skill 阶段（2026-10-28）
+## 在线视频的 H3 Skill 阶段
 
-生产装配为脚本/剧本注入 `DeepSeekTextAdapter` 和 `DeepSeekModelRegistry`，新任务只选择 `deepseek-flash`；剧本继续冻结 `video-script-generation` 及其原有模板/风格/案例。分镜继续冻结 `storyboard-planning`，真实调用由服务器直接执行。脚本持久队列由服务器上的 `text-api-worker.service` 消费；不依赖本地 Codex 心跳。
+新建在线任务先由本机已登录的 Codex 文本执行器领取 planning 阶段，复用 `H3SkillPlanner`、官方指南和 gpt-6-luna fast，冻结 Skill 输入并按原凭据恢复。服务端校验计划不得改变分镜参数，保存后将同一预约交给云端 2.0 执行器；云端只使用 Skill 产出的提示词，不调用本机 H3。Skill 明确失败则释放积分；结果不明保留预约和检查点，不重复调用。已受理的旧任务不插入新阶段。
 
-`config/deepseek/` 单独声明 API 模型、固定路由和价格。按用户选择，文字功能暂为 0 积分，仍调用原 reserve/record_job 记录零金额事务、幂等与失败结果；视频保持原分辨率每秒价格。旧 Codex 配置保留给历史执行器恢复；不得把已受理旧任务隐式改为 DeepSeek 重跑。
-
-`DeepSeekTextAdapter` 使用官方 HTTPS Chat Completions、固定模型 `deepseek-flash`，在调用前写入不含密钥的请求摘要，成功后保存正文与 SHA-256 完成回执。只接受 finish_reason=stop 的完整文本。网络超时、服务器故障等结果未知时进入 uncertain，不自动重试；确定拒绝/截断/结构错误按失败处理。恢复只核验原回执与正文，不进行新模型调用；既有日志子目录 `codex/` 保留以兼容磁盘与恢复规则，其名称不代表调用的 Provider。
-
-新 online-2.0 视频任务先由云端 `video-prompt-worker.service` 领取 planning 阶段，以 `seedance-2-video` Skill 调用 DeepSeek。输入、Skill 摘要和返回计划持久化；服务端核验参数和引号原文不被改写后，将同一个积分预约交给视频生成执行器。Skill 明确失败退积分；结果未知保留预约。已受理且无 skill_required 的旧任务不插入新阶段。
-
-生产 composition 仅启用 SD2.0 新视频任务。H3 历史记录和已受理队列保留原读取、执行、对账与恢复能力。分镜可登记 online-2.0，素材时长按 5/10/15 秒规划；分镜转视频显式传递同一 backend，不回退为 H3。当前第三方通道仅支持文生视频，不假定具备官方完整模型的参考图/首尾帧能力。
-
-密钥通过 DEEPSEEK_API_KEY 或 IMAGE_WORKBENCH_TEXT_API_CONFIG 指向的受保护 JSON 读取，不进入仓库、发布包、回执或浏览器。部署时 Web 服务也需配置相同路径以执行 AI 分镜。新增的配置、Skill 与来源说明已纳入发布清单。停用新提交并完成/核对在途 API 任务后方可回退服务；保留任务与执行器缓存，不迁移或删除旧结果。
+生产可设置 `IMAGE_WORKBENCH_DISABLE_H3_SUBMISSIONS=1` 禁止新提交本机 H3 任务并在页面隐藏入口，旧任务及其恢复继续按原后端处理。旧 H3 分镜需重建为在线视频分镜。planning worker 需要运行在原 Codex 登录机器；视频的供应方提交、轮询和回传在云端执行。

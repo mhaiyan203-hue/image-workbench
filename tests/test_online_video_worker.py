@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +63,46 @@ class OnlineWorkerTests(unittest.TestCase):
         self.assertEqual(self.transport.completed[-1]['status'], 'uncertain')
         self.worker.process(self.manifest)
         self.assertEqual(sum(method == 'POST' for method, _ in self.requests), 1)
+
+    def test_capacity_rejection_settles_failure_even_after_lost_completion(self):
+        calls = []
+        def capacity(request):
+            calls.append(request.method)
+            return httpx.Response(503, json={'code': 'QUOTA_EXCEEDED', 'message': '当前算力已满，请稍后重试'})
+        self.worker.client = httpx.Client(transport=httpx.MockTransport(capacity))
+        self.addCleanup(self.worker.client.close)
+        complete = self.transport.complete
+        def lost_response(manifest, result):
+            complete(manifest, result)
+            raise httpx.ReadTimeout('lost completion response')
+        self.transport.complete = lost_response
+        with self.assertRaises(httpx.ReadTimeout):
+            self.worker.process(self.manifest)
+        journal = json.loads((Path(self.temp.name) / (self.manifest['job_id'] + '.json')).read_text())
+        self.assertEqual(journal['phase'], 'rejected')
+        self.assertEqual(journal['submission_diagnostic']['provider_code'], 'QUOTA_EXCEEDED')
+        self.transport.complete = complete
+        self.worker.process(self.manifest)
+        self.assertEqual(calls, ['POST'])
+        self.assertEqual(self.transport.completed[-1]['status'], 'failed')
+        self.assertIn('算力已满', self.transport.completed[-1]['error'])
+
+    def test_other_503_responses_remain_uncertain_without_replay(self):
+        for body in ({'code': 'INTERNAL_ERROR'}, {'code': 'QUOTA_EXCEEDED'},
+                     {'code': 'QUOTA_EXCEEDED', 'message': '当前算力已满，请稍后重试', 'id': '123'},
+                     ['unavailable'], None):
+            with self.subTest(body=body):
+                self.manifest['job_id'] = uid()
+                calls = []
+                def unavailable(request, calls=calls, body=body):
+                    calls.append(request.method)
+                    return httpx.Response(503, json=body) if body is not None else httpx.Response(503, text='bad gateway')
+                with httpx.Client(transport=httpx.MockTransport(unavailable)) as client:
+                    self.worker.client = client
+                    self.worker.process(self.manifest)
+                    self.worker.process(self.manifest)
+                self.assertEqual(calls, ['POST'])
+                self.assertEqual(self.transport.completed[-1]['status'], 'uncertain')
 
     def test_recover_known_task_and_retry_same_output_after_lost_ack(self):
         self.worker.process(self.manifest)

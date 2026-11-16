@@ -1,0 +1,4 @@
+Satisfy by Sideshow.
+Source: https://github.com/google/fonts/tree/main/apache/satisfy
+License: Apache License 2.0; see LICENSE.txt.
+Font distributed unmodified. Used for the Image Workbench wordmark.

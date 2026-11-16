@@ -68,6 +68,7 @@ class EcommerceSuiteTests(unittest.TestCase):
     def test_insufficient_balance_rolls_back_entire_suite(self):
         response = self.client.post(self.path, json=self.body)
         self.assertEqual(response.status_code, 402, response.text)
+        self.assertEqual(response.json()["expected_credit"], 450)
         self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 0)
         self.assertEqual(self.app.identity.pending_jobs(), [])
         tasks = self.client.get(self.path).json()["suites"][0]["tasks"]
@@ -114,7 +115,7 @@ class EcommerceSuiteTests(unittest.TestCase):
 
     def test_capacity_failure_rolls_back_and_recovery_uses_outbox(self):
         self.fund()
-        self.state.identity.capacity_policy = CapacityPolicy(max_pending_per_account=10)
+        self.state.identity.capacity_policy = CapacityPolicy(max_daily_submitted_credit=400)
         response = self.client.post(self.path, json=self.body)
         self.assertEqual(response.status_code, 429, response.text)
         self.assertEqual(self.app.identity.pending_jobs(), [])
@@ -125,6 +126,16 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.assertEqual(len(self.app.identity.pending_jobs()), 15)
         self.assertEqual(self.client.post(self.path, json=self.body).status_code, 200)
         self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+
+    def test_suite_occupies_one_pending_submission_slot(self):
+        self.fund()
+        self.state.identity.capacity_policy = CapacityPolicy(max_pending_per_account=1, max_pending_total=1)
+        response = self.client.post(self.path, json=self.body)
+        self.assertEqual(response.status_code, 200, response.text)
+        second = self.client.post(self.path, json={**self.body, "request_id": uuid4().hex})
+        self.assertEqual(second.status_code, 429, second.text)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        self.assertEqual(len(self.app.identity.pending_jobs()), 15)
 
     def test_client_cannot_override_price_or_count(self):
         for extra in ({"package_credit": 1}, {"prompts": ["x"] * 14}, {"confirm_generation": False}):

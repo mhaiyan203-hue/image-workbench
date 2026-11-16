@@ -47,7 +47,6 @@ class EcommerceSuites:
     def _path(self, project_id, suite_id):
         self.state.projects.get_main_project(project_id)
         directory = self.storage.files.path(".workbench", "ecommerce", _validate_id(project_id))
-        directory.mkdir(parents=True, exist_ok=True)
         return directory / (_validate_id(suite_id) + ".json")
 
     def get(self, project_id, suite_id):
@@ -77,6 +76,7 @@ class EcommerceSuites:
         for ref in reference_artifact_ids:
             library.require(subproject_id, ref)
         path = self._path(project_id, request_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
         fingerprint = hashlib.sha256(json.dumps([template_id, subproject_id, reference_artifact_ids, prompts],
                                                ensure_ascii=False).encode()).hexdigest()
         with FileLock(path.with_suffix(".lock"), timeout=30):
@@ -106,6 +106,7 @@ class EcommerceSuites:
                 jobs = []
                 for slot in record["slots"]:
                     jobs.append({"schema_version": 1, "job_id": uuid4().hex,
+                                 "commerce_suite_id": request_id,
                                  "request_id": uuid5(UUID(request_id), "run-" + slot["task_id"]).hex,
                                  "project_id": pid, "task_id": slot["task_id"], "backend": self.state.backend,
                                  "action": "generate", "confirmed": True, "restore_execution_id": None,

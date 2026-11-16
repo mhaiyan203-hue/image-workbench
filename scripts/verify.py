@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON = ["test_retired_qwen", "test_architecture", "test_quality_guard", "test_module_isolation", "test_http_contract", "test_frontend_modules", "test_request_boundaries"]
 SUITES = {
     "prompt": ["test_prompt_enhancement", "test_prompt_enhancement_matrix"],
-    "images": ["test_ecommerce_suites", "test_web", "test_worker", "test_workbench_state", "test_remote", "test_runner", "test_task_timing", "test_scheduling", "test_asset_inputs", "test_asset_browser", "test_asset_e2e_browser", "test_image_prompting", "test_image_styles_browser", "test_image_actions_browser", "test_image_timer_browser", "test_deploy_release", "test_task_recovery", "test_image_api_backend"],
+    "images": ["test_ecommerce_browser", "test_ecommerce_suites", "test_web", "test_worker", "test_workbench_state", "test_remote", "test_runner", "test_task_timing", "test_scheduling", "test_asset_inputs", "test_asset_browser", "test_asset_e2e_browser", "test_image_prompting", "test_image_styles_browser", "test_image_actions_browser", "test_image_timer_browser", "test_deploy_release", "test_task_recovery", "test_image_api_backend"],
     "projects": ["test_project_web", "test_project_manager", "test_project_cli", "test_request_metadata_cache"],
     "accounts": ["test_image_trials", "test_accounts", "test_registration", "test_capacity", "test_script_limits"],
     "scripts": ["test_deepseek_text", "test_api_creative_flow", "test_script_web", "test_script_service", "test_script_storage", "test_script_models",

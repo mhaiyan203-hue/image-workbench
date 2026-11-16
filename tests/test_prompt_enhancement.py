@@ -106,9 +106,10 @@ class PromptEnhancementServiceTests(unittest.TestCase):
         self.service = PromptEnhancementService(
             skills=PromptSkillRegistry(), styles=PromptStyleLibrary(), model=self.model)
 
-    def test_four_skills_and_existing_style_library_are_reused(self):
+    def test_registered_skills_and_existing_style_library_are_reused(self):
         self.assertEqual({skill.skill_id for skill in self.service.skills.list()},
-                         {"image-generation", "image-editing", "consistency", "cinematic"})
+                         {"image-generation", "image-editing", "consistency", "cinematic",
+                          "ecommerce-clothing-model-editor", "ecommerce-small-product-editor"})
         styles = self.service.styles.list()
         self.assertEqual(len(styles), 15)
         self.assertTrue(all(item["style_id"] and item["name"] for item in styles))

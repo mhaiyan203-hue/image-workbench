@@ -64,14 +64,22 @@ class CapacityPolicy:
                 f"脚本提交过于频繁：每 {self.script_window_seconds} 秒最多 {self.max_script_submissions_per_window} 次，请稍后重试。"
             )
 
-    def check(self, db, account_id, amount):
+    def check(self, db, account_id, amount, *, group_id=None):
         # 与 freeze/outbox 同一个 BEGIN IMMEDIATE，避免最后一个名额并发穿透。
-        if self.max_pending_per_account:
-            count = db.execute("SELECT COUNT(*) FROM reservations WHERE account_id=? AND status IN ('credit_frozen','running')", (account_id,)).fetchone()[0]
+        # A purchased suite occupies one submission slot while its images retain
+        # independent worker jobs and settlement. Ordinary jobs remain one slot each.
+        joined = group_id and db.execute(
+            "SELECT 1 FROM reservations WHERE account_id=? AND status IN ('credit_frozen','running') "
+            "AND json_extract(payload,'$.commerce_suite_id')=? LIMIT 1", (account_id, group_id)
+        ).fetchone()
+        if self.max_pending_per_account and not joined:
+            count = db.execute("SELECT COUNT(DISTINCT COALESCE(json_extract(payload,'$.commerce_suite_id'),job_id)) "
+                               "FROM reservations WHERE account_id=? AND status IN ('credit_frozen','running')", (account_id,)).fetchone()[0]
             if count >= self.max_pending_per_account:
                 raise CapacityExceeded("你的待处理任务已达上限，请等待已有任务结束后再提交；本次未冻结积分。")
-        if self.max_pending_total:
-            count = db.execute("SELECT COUNT(*) FROM reservations WHERE status IN ('credit_frozen','running')").fetchone()[0]
+        if self.max_pending_total and not joined:
+            count = db.execute("SELECT COUNT(DISTINCT account_id || ':' || COALESCE(json_extract(payload,'$.commerce_suite_id'),job_id)) "
+                               "FROM reservations WHERE status IN ('credit_frozen','running')").fetchone()[0]
             if count >= self.max_pending_total:
                 raise CapacityExceeded("当前执行队列已满，请稍后再提交；本次未冻结积分。")
         if self.max_daily_submitted_credit:

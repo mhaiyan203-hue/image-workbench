@@ -460,6 +460,14 @@ class IdentityStore:
         if any(type(amount) is not int or amount < 0 for amount in amounts):
             raise ValueError("套餐积分无效")
         with self.transaction() as db:
+            aid = owner["account_id"]
+            needed = sum(amount for job, amount in zip(jobs, amounts, strict=True)
+                         if not db.execute("SELECT 1 FROM reservations WHERE account_id=? AND request_id=?",
+                                           (aid, job["request_id"])).fetchone())
+            wallet = db.execute("SELECT * FROM credit_accounts WHERE account_id=?", (aid,)).fetchone()
+            remaining = wallet["total_credit"] - wallet["used_credit"] - wallet["frozen_credit"]
+            if not wallet["is_unlimited"] and remaining < needed:
+                raise CreditInsufficient(needed, remaining)
             return [self._reserve_in_transaction(db, dict(job), owner, amount)
                     for job, amount in zip(jobs, amounts, strict=True)]
 
@@ -480,7 +488,7 @@ class IdentityStore:
         else:
             if job.get("kind") == "script":
                 self.capacity_policy.check_script(db, aid)
-            self.capacity_policy.check(db, aid, amount)
+            self.capacity_policy.check(db, aid, amount, group_id=job.get("commerce_suite_id"))
             job.update(account_id=aid, workspace_id=wid, credit_cost=amount, credit_status="credit_frozen")
             stamp = _now()
             db.execute("UPDATE credit_accounts SET frozen_credit=frozen_credit+?,updated_at=? WHERE account_id=?", (amount, stamp, aid))

@@ -57,6 +57,7 @@ with tarfile.open(archive, 'r:gz') as bundle:
                 or member.name == 'config/prompt_enhancement.json'
                 or (path.parts[:3] == ('skills', 'prompt-enhancement', 'skills') and path.suffix == '.json')
                 or (path.parts[:3] == ('skills', 'image-asset-generation', 'styles') and path.suffix == '.json')
+                or (path.parts[:2] == ('skills', 'ecommerce-suites') and path.suffix in {'.json', '.md'})
                 or (path.parts[:2] == ('skills', 'video-script-generation') and path.suffix in {'.json', '.txt', '.md'}))):
             raise ValueError('Unexpected release member')
         seen.add(member.name)

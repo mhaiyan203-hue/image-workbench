@@ -18,7 +18,11 @@
       const b = el('button', '', 'template'); b.dataset.id = t.id;
       const img = el('img'); img.src = `/static/ecommerce-examples/${t.id}/cover.webp`; img.alt = t.name + '案例预览';
       img.onerror = () => img.replaceWith(el('div', t.with_model ? '服装 · 同一位模特' : '小商品 · 无人物', 'placeholder'));
-      const copy = el('div', '', 'copy'); copy.append(el('h2', t.name), el('p', t.description), el('strong', `${t.package_credit} 积分 / 15 张 · 五折`)); b.append(img, copy); b.onclick = () => choose(t.id); $('templates').append(b);
+      const copy = el('div', '', 'copy'); copy.append(el('h2', t.name), el('p', t.description), el('strong', `${t.package_credit} 积分 / 15 张 · 五折`)); b.append(img, copy); b.onclick = () => choose(t.id); const wrapper = el('div');
+      const examples = el('details', '', 'examples'); examples.append(el('summary', '查看完整 15 张案例'));
+      const gallery = el('div', '', 'example-grid');
+      for(let i=1;i<=15;i++) { const a=el('a'), sample=el('img'); a.href=`/static/ecommerce-examples/${t.id}/${String(i).padStart(2,'0')}.webp`;a.target='_blank';a.rel='noopener';sample.src=a.href;sample.loading='lazy';sample.alt=`${String(i).padStart(2,'0')} · ${t.slots[i-1].name}`;a.append(sample);gallery.append(a); }
+      examples.append(gallery);wrapper.append(b,examples);$('templates').append(wrapper);
     }
     choose(selected);
   }
@@ -63,6 +67,10 @@
         const box = el('div','','suite'), heading = el('h3',suite.name), download = el('a','下载已完成图片 ZIP');
         download.href = `/api/main-projects/${suite.project_id}/suites/${suite.suite_id}/download?workspace_id=${encodeURIComponent(wid)}`; heading.append(download); box.append(heading);
         box.append(el('p',`${suite.package_credit} 积分 / 15 张 · ${suite.tasks.filter(t => t.outputs?.length).length} 张已完成`));
+        if(suite.status === 'preparing') {
+          const resume=el('button','继续提交整套');
+          resume.onclick=()=>busy(resume,async()=>{await api(`/api/main-projects/${suite.project_id}/suites`,{method:'POST',body:JSON.stringify({request_id:suite.suite_id,template_id:suite.template_id,subproject_id:suite.subproject_id,reference_artifact_ids:suite.reference_artifact_ids,prompts:suite.slots.map(s=>s.prompt),confirm_generation:true})});message('整套已提交');await history();});box.append(resume);
+        }
         const grid = el('div','','results');
         for (const task of suite.tasks) {
           const card = el('div','','result');

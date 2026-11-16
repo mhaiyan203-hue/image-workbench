@@ -115,3 +115,8 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 ## 图片内测账号权限（2026-11-11）
 
 `GET /api/auth/me` 兼容性新增 `image_only: boolean`。服务端根据账号批次表及管理员身份决定该值，普通注册和请求参数不能设置。受限账号访问 `/scripts`、`/video`、`/api/scripts`、`/api/video`、`/api/storyboards` 及其子路径返回 HTTP 403，错误码 `feature_not_enabled`。图片和提示词增强接口保持可用；工作区切换不改变限制；管理员和无批次标记的历史账号权限保持原样。Worker端点仍使用原有独立鉴权。详见 [图片试用账号](image_trials_20261111.md)。
+
+
+## 电商套图（2026-11-16）
+
+新增 `/ecommerce` 与套餐规划、提交、历史和ZIP下载接口；十五张参考图生成原价900积分、五折450积分，失败逐张退30积分，普通图片计费保持原样。详见 [电商套图契约](ecommerce_suites.md)。

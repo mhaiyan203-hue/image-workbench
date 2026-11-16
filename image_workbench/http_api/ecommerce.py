@@ -48,7 +48,7 @@ def install_routes(app, service, templates):
         if not count:
             raise ValueError("暂无已完成图片")
         stream.seek(0)
-        return StreamingResponse(stream, media_type="application/zip",
+        return StreamingResponse(iter(lambda: stream.read(64 * 1024), b""), media_type="application/zip",
                                  headers={"Content-Disposition": f'attachment; filename="suite-{suite_id}.zip"'})
 
 

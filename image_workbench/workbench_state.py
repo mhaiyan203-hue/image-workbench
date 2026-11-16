@@ -327,6 +327,8 @@ class WorkbenchState:
                    "previous_execution_id": previous.execution_id if previous else None,
                    "execution_id": None, "status": "queued", "failure_type": None,
                    "created_at": _now(), "started_at": None, "finished_at": None}
+            if options and options.get("commerce_suite"):
+                job["commerce_suite_id"] = options["commerce_suite"]["suite_id"]
             if self.identity:
                 job = self.identity.reserve(job, owner, self.estimate_credit(project_id, task_id))
             self.save_job(job)

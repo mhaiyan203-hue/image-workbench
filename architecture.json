@@ -113,7 +113,8 @@
         "remote_queue",
         "remote_worker",
         "worker",
-        "batch_runner"
+        "batch_runner",
+        "ecommerce_suites"
       ],
       "may_import": [
         "foundation",
@@ -172,8 +173,14 @@
       ]
     },
     "workflows": {
-      "modules": ["script_workflow"],
-      "may_import": ["foundation", "scripts", "storyboards"]
+      "modules": [
+        "script_workflow"
+      ],
+      "may_import": [
+        "foundation",
+        "scripts",
+        "storyboards"
+      ]
     },
     "pipeline": {
       "modules": [
@@ -307,7 +314,10 @@
     "state_ports": {
       "IWVideo": {
         "owner": "web_static/video.js",
-        "consumers": ["web_static/pipeline.js", "web_static/storyboard.js"]
+        "consumers": [
+          "web_static/pipeline.js",
+          "web_static/storyboard.js"
+        ]
       }
     }
   }

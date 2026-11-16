@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "skill_id": "ecommerce-small-product-editor",
+  "version": 1,
+  "name": "小商品静物套图提示词编辑",
+  "description": "编辑套图单张提示词并保持商品与整套风格一致。",
+  "task_types": [
+    "reference_generate"
+  ],
+  "modes": [
+    "standard",
+    "creative"
+  ],
+  "priority": 0,
+  "selection": {
+    "keywords": [],
+    "reference_roles": [],
+    "style_ids": []
+  },
+  "rules": {
+    "preserve": [
+      "商品外形、颜色、结构、材质、Logo及已确认事实",
+      "本张图片用途和统一配色光线",
+      "全套不出现人物、模特、手部、面孔、人形倒影或人台。商品完整性优先于装饰。"
+    ],
+    "forbid_additions": [
+      "虚构尺寸、功效、销量、认证或赠品",
+      "拼图、九宫格、重复商品",
+      "未请求的文字与品牌"
+    ],
+    "structure": [
+      "商品事实",
+      "本张用途与构图",
+      "统一风格与保留约束"
+    ],
+    "standard": [
+      "只把用户意图改写为可执行的单张提示词",
+      "全套不出现人物、模特、手部、面孔、人形倒影或人台。商品完整性优先于装饰。"
+    ],
+    "creative": [
+      "允许调整场景与镜头，不修改商品事实",
+      "全套不出现人物、模特、手部、面孔、人形倒影或人台。商品完整性优先于装饰。"
+    ]
+  },
+  "output_requirements": [
+    "输出单张图片提示词；不得改变套餐张数和价格"
+  ]
+}

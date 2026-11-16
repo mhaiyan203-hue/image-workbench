@@ -399,30 +399,55 @@ class IdentityStore:
             self.capacity_policy.check_script(db, account_id)
 
     def reserve(self, job, owner, amount):
+        # Commit the existing rejection diagnostic while preserving the public contract.
+        failure = None
+        with self.transaction() as db:
+            try:
+                result = self._reserve_in_transaction(db, job, owner, amount)
+            except CreditInsufficient as exc:
+                failure = exc
+        if failure:
+            raise failure
+        return result
+
+    def reserve_many(self, jobs, owner, amounts):
+        """Atomically reserve a complete image suite, including durable job outbox.
+
+        A failure rolls back every new reservation; no worker sees a partial purchase.
+        Existing request IDs return their original jobs when a response was lost.
+        """
+        if len(jobs) != len(amounts) or not jobs:
+            raise ValueError("套餐任务与价格不匹配")
+        if any(type(amount) is not int or amount < 0 for amount in amounts):
+            raise ValueError("套餐积分无效")
+        with self.transaction() as db:
+            return [self._reserve_in_transaction(db, dict(job), owner, amount)
+                    for job, amount in zip(jobs, amounts, strict=True)]
+
+    def _reserve_in_transaction(self, db, job, owner, amount):
         aid, wid = owner["account_id"], owner["workspace_id"]
         insufficient = None
-        with self.transaction() as db:
-            old = db.execute("SELECT * FROM reservations WHERE (account_id=? AND request_id=?) OR (task_id=? AND status IN ('credit_frozen','running')) ORDER BY created_at LIMIT 1", (aid, job["request_id"], job["task_id"])).fetchone()
-            if old:
-                previous_payload = json.loads(old["payload"])
-                if (old["account_id"], old["workspace_id"], old["project_id"], old["task_id"], previous_payload.get("kind", "image")) != (aid, wid, job["project_id"], job["task_id"], job.get("kind", "image")):
-                    raise ValueError("该请求标识已用于另一项任务")
-                return self._job_payload(old)
-            wallet = db.execute("SELECT * FROM credit_accounts WHERE account_id=?", (aid,)).fetchone()
-            remaining = wallet["total_credit"] - wallet["used_credit"] - wallet["frozen_credit"]
-            if not wallet["is_unlimited"] and remaining < amount:
-                db.execute("INSERT INTO credit_rejections VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET expected=excluded.expected,updated_at=excluded.updated_at", (job["task_id"], aid, amount, _now()))
-                insufficient = CreditInsufficient(amount, remaining)
-            else:
-                if job.get("kind") == "script":
-                    self.capacity_policy.check_script(db, aid)
-                self.capacity_policy.check(db, aid, amount)
-                job.update(account_id=aid, workspace_id=wid, credit_cost=amount, credit_status="credit_frozen")
-                stamp = _now()
-                db.execute("UPDATE credit_accounts SET frozen_credit=frozen_credit+?,updated_at=? WHERE account_id=?", (amount, stamp, aid))
-                db.execute("INSERT INTO reservations VALUES (?,?,?,?,?,?,?,'credit_frozen',?,?,?)", (job["job_id"], aid, wid, job["project_id"], job["task_id"], job["request_id"], amount, json.dumps(job), stamp, stamp))
-                self._ledger(db, aid, wid, job["task_id"], job["job_id"], "freeze", amount)
-                db.execute("DELETE FROM credit_rejections WHERE task_id=?", (job["task_id"],))
+        old = db.execute("SELECT * FROM reservations WHERE (account_id=? AND request_id=?) OR (task_id=? AND status IN ('credit_frozen','running')) ORDER BY created_at LIMIT 1", (aid, job["request_id"], job["task_id"])).fetchone()
+        if old:
+            previous_payload = json.loads(old["payload"])
+            if (old["account_id"], old["workspace_id"], old["project_id"], old["task_id"], previous_payload.get("kind", "image")) != (aid, wid, job["project_id"], job["task_id"], job.get("kind", "image")):
+                raise ValueError("该请求标识已用于另一项任务")
+            return self._job_payload(old)
+        wallet = db.execute("SELECT * FROM credit_accounts WHERE account_id=?", (aid,)).fetchone()
+        remaining = wallet["total_credit"] - wallet["used_credit"] - wallet["frozen_credit"]
+        if not wallet["is_unlimited"] and remaining < amount:
+            db.execute("INSERT INTO credit_rejections VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET expected=excluded.expected,updated_at=excluded.updated_at", (job["task_id"], aid, amount, _now()))
+            insufficient = CreditInsufficient(amount, remaining)
+        else:
+            if job.get("kind") == "script":
+                self.capacity_policy.check_script(db, aid)
+            self.capacity_policy.check(db, aid, amount)
+            job.update(account_id=aid, workspace_id=wid, credit_cost=amount, credit_status="credit_frozen")
+            stamp = _now()
+            db.execute("UPDATE credit_accounts SET frozen_credit=frozen_credit+?,updated_at=? WHERE account_id=?", (amount, stamp, aid))
+            db.execute("INSERT INTO reservations VALUES (?,?,?,?,?,?,?,'credit_frozen',?,?,?)", (job["job_id"], aid, wid, job["project_id"], job["task_id"], job["request_id"], amount, json.dumps(job), stamp, stamp))
+            self._ledger(db, aid, wid, job["task_id"], job["job_id"], "freeze", amount)
+            db.execute("DELETE FROM credit_rejections WHERE task_id=?", (job["task_id"],))
         if insufficient:
             raise insufficient
         return job

@@ -6,10 +6,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ..storage import StorageManager
 from ..workbench_state import WorkbenchState
+from ..ecommerce_suites import EcommerceSuites
 from .guard import LocalRequestGuard
 from ..contracts.images import MAX_UPLOAD_BYTES
 from .errors import install_error_handlers
-from . import projects, tasks, artifacts, assets
+from . import projects, tasks, artifacts, assets, ecommerce
 
 def create_workspace_app(storage: StorageManager | None = None, *, backend="codex", remote_access=None, state=None, guarded=True) -> FastAPI:
     storage = storage or StorageManager()
@@ -25,6 +26,7 @@ def create_workspace_app(storage: StorageManager | None = None, *, backend="code
         install_routes(app, RemoteQueue(state))
     directory = Path(__file__).resolve().parents[1]
     templates = Jinja2Templates(directory=directory / "web_templates")
+    ecommerce.install_routes(app, EcommerceSuites(state), templates)
     app.mount("/static", StaticFiles(directory=directory / "web_static"), name="static")
     install_error_handlers(app, storage)
     for routes in (projects, tasks, artifacts, assets):

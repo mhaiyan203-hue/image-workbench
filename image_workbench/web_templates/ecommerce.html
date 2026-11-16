@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>电商套图 · 图片工作台</title><link rel="stylesheet" href="/static/ecommerce.css?v=1"><script defer src="/static/workbench-api.js"></script><script defer src="/static/ecommerce.js?v=1"></script></head>
+<body><header><a href="/">← 图片工作台</a><span id="account"></span></header><main>
+<div class="intro"><span class="eyebrow">PRODUCT IMAGE COLLECTION</span><h1>一件商品，一整套好图。</h1><p>服装上身与小商品静物，两套精选方案。每套 15 张，统一风格，逐张可编辑。</p><span class="offer">套图限时五折 · 原价 <del id="original">900</del> → <strong id="price">450</strong> 积分</span></div>
+<div id="templates" class="templates"></div>
+<section id="editor"><h2>准备你的商品</h2><div class="fields"><label>商品名称、材质、真实卖点与规格<textarea id="product" maxlength="2000" placeholder="例如：米白色棉质衬衫，宽松版型，胸前单口袋。填写已确认的事实。"></textarea></label><label id="modelField">整套模特设定<input id="model" maxlength="500" placeholder="例如：同一成年女性，黑色齐肩发，自然妆容"></label><label>商品参考图（必需，可补充模特参考）<input id="files" type="file" multiple accept="image/png,image/jpeg,image/webp"><small>第一张为商品，后续图片可补充细节或模特；最多 8 张、合计 40 MB。</small></label></div><button id="plan">展开 15 张内容与提示词</button></section>
+<section id="planSection" hidden><h2>确认每张图要表达什么</h2><p>可直接修改提示词，或使用本套的提示词编辑 Skill。提交后保存为不可变任务。</p><div id="slots" class="slots"></div><div class="purchase"><span id="quote"></span><button id="submit">确认生成整套</button></div><p class="muted">成功图片按折后单价结算，明确失败退回对应积分。失败后可按折后单价重新提交；状态待确认时请先查看任务。</p></section>
+<p id="message" role="status"></p>
+<section><div class="section-head"><h2>我的套图</h2><button id="refresh" class="secondary">刷新</button></div><div id="history"></div></section>
+</main></body></html>

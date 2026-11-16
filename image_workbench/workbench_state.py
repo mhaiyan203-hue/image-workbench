@@ -184,7 +184,7 @@ class WorkbenchState:
 
     def create_task(self, project_id, *, request_id, operation, prompt, aspect_ratio="auto", base_artifact_id=None, inputs=(),
                     subproject_id=None, name=None, description="", reference_artifact_ids=(),
-                    original_prompt=None, prompt_source=None):
+                    original_prompt=None, prompt_source=None, commerce_suite=None):
         _validate_id(request_id)
         _text(prompt, "提示词")
         if len(prompt) > 12000:
@@ -229,6 +229,8 @@ class WorkbenchState:
             parts.append(original_prompt)
         if prompt_source is not None:
             parts.append(prompt_source)
+        if commerce_suite is not None:
+            parts.append(commerce_suite)
         fingerprint = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
         with self.control_lock():
             previous = self.task_options(project_id, request_id)
@@ -241,7 +243,8 @@ class WorkbenchState:
             options = {"schema_version": 1, "project_id": project_id, "task_id": request_id,
                        "fingerprint": fingerprint, "aspect_ratio": aspect_ratio, "state": "preparing", "created_at": _now(),
                        "reference_artifact_ids": list(reference_artifact_ids),
-                       "original_prompt": original_prompt, "prompt_source": prompt_source}
+                       "original_prompt": original_prompt, "prompt_source": prompt_source,
+                       "commerce_suite": commerce_suite}
             path = self._task_file("tasks", project_id, request_id, create=True)
             self.storage.files.write_json(path, options)
             try:
@@ -283,6 +286,8 @@ class WorkbenchState:
                     # 仅确认原请求。不可把旧 payload 写回覆盖后续重试的作业。
                     return previous_request
             job = self.get_job(project_id, task_id)
+            if options and options.get("commerce_suite") and not job:
+                raise ConflictError("请从套图页面提交完整套餐")
             if job and job["request_id"] == request_id:
                 return job
             if job and job["status"] in {"queued", "running", "uncertain"}:
@@ -320,6 +325,9 @@ class WorkbenchState:
 
     def estimate_credit(self, project_id, task_id):
         task = self.storage.get_task(project_id, task_id)
+        suite = (self.task_options(project_id, task_id) or {}).get("commerce_suite")
+        if suite:
+            return suite["unit_credit"]
         references = len(task_input_artifacts(self.storage, project_id, task_id))
         return CreditCostCalculator.calculate(task.operation, self.backend, 1, references + bool(task.base_artifact_id))
 

@@ -119,7 +119,7 @@ class AccountApplication:
             return
         session = scope.get("account_session")
         if not session:
-            response = RedirectResponse("/login", status_code=303) if path in {"/", "/admin", "/video", "/scripts", "/qwen-test"} else JSONResponse({"detail": "请先登录"}, status_code=401)
+            response = RedirectResponse("/login", status_code=303) if path in {"/", "/admin", "/video", "/scripts", "/qwen-test", "/ecommerce"} else JSONResponse({"detail": "请先登录"}, status_code=401)
             await response(scope, receive, send)
             return
         if path == "/admin" or path.startswith("/api/admin/"):

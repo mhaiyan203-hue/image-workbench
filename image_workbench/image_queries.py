@@ -78,12 +78,15 @@ class ImageQueries:
             result.update(credit)
             # 下一次执行的报价与已有预约的冻结/结算金额分开；复用本次已校验的输入。
             result["estimated_credit"] = CreditCostCalculator.calculate(task.operation, self.state.backend, 1, len(inputs) + bool(task.base_artifact_id))
+            if options and options.get("commerce_suite"):
+                result["estimated_credit"] = options["commerce_suite"]["unit_credit"]
             result["workspace_id"] = self.state.identity.ownership(main["main_project_id"])["workspace_id"]
             if result["credit_status"] == "credit_insufficient":
                 result.update(status="credit_insufficient", status_label="积分不足")
         if not detail:
             return result
-        valid_options = not options or (options["state"] == "ready" and not options.get("asset_library"))
+        valid_options = not options or (options["state"] == "ready" and not options.get("asset_library")
+                                        and (not options.get("commerce_suite") or bool(job)))
         result.update(
             inputs=[self.artifact_dto(item, catalog=catalog) for item in inputs], outputs=[self.artifact_dto(item, catalog=catalog) for item in outputs],
             base_image=self.artifact_dto(self.state.storage.get_artifact(task.base_artifact_id), catalog=catalog) if task.base_artifact_id else None,

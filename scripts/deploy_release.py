@@ -60,6 +60,9 @@ def runtime_files(root):
                 if path.is_symlink():
                     raise ValueError(f"{label}目录不允许符号链接")
                 paths.append(path)
+    if (root / "image_workbench" / "ecommerce_suites.py").is_file():
+        directory = root / "skills" / "ecommerce-suites"
+        paths.extend(path for path in sorted(directory.rglob("*")) if path.is_file() and path.suffix in {".json", ".md"})
     paths.extend(root / name for name in ("requirements.txt", "requirements-web.txt"))
     for path in paths:
         if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):

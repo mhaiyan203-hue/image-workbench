@@ -15,5 +15,7 @@ class SuiteSubmit(Payload):
     template_id: Literal["clothing-model", "small-product"]
     subproject_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     reference_artifact_ids: list[str] = Field(min_length=1, max_length=8)
-    prompts: list[str] = Field(min_length=15, max_length=15)
+    # Historical fifteen-image purchases remain replayable; the service checks
+    # the exact count against the current template or saved purchase snapshot.
+    prompts: list[str] = Field(min_length=1, max_length=15)
     confirm_generation: Literal[True]

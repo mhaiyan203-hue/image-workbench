@@ -26,7 +26,8 @@ def create_workspace_app(storage: StorageManager | None = None, *, backend="code
         install_routes(app, RemoteQueue(state))
     directory = Path(__file__).resolve().parents[1]
     templates = Jinja2Templates(directory=directory / "web_templates")
-    ecommerce.install_routes(app, EcommerceSuites(state), templates)
+    suite_service = EcommerceSuites(state)
+    ecommerce.install_routes(app, suite_service, templates)
     app.mount("/static", StaticFiles(directory=directory / "web_static"), name="static")
     install_error_handlers(app, storage)
     for routes in (projects, tasks, artifacts, assets):
@@ -45,7 +46,8 @@ def create_workspace_app(storage: StorageManager | None = None, *, backend="code
         return templates.TemplateResponse(request=request, name="index.html",
                                           context={"image_only": bool((request.scope.get("account_session") or {}).get("image_only")),
                                                    "asset_version": str(revision), "remote_mode": state.execution_mode == "remote",
-                                                   "image_api_mode": state.backend == "image-api"},
+                                                   "image_api_mode": state.backend == "image-api",
+                                                   "ecommerce_templates": suite_service.catalog()},
                                           headers={"Cache-Control": "no-store"})
 
     @app.get("/api/config")

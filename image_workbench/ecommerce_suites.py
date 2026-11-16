@@ -19,8 +19,8 @@ def template(template_id):
     if template_id not in TEMPLATE_IDS:
         raise ValueError("未知套图模板")
     value = json.loads((SKILLS / template_id / "template.json").read_text(encoding="utf-8"))
-    if len(value["slots"]) != 15:
-        raise ValueError("套图必须包含十五张图片")
+    if not 1 <= len(value["slots"]) <= 15:
+        raise ValueError("套图模板张数无效")
     return value
 
 
@@ -30,9 +30,12 @@ class EcommerceSuites:
         self.storage = state.storage
 
     def catalog(self):
-        ordinary = CreditCostCalculator.calculate("generate", self.state.backend, 15, 1)
-        return [{**template(key), "original_credit": ordinary, "package_credit": ordinary // 2,
-                 "unit_credit": ordinary // 30} for key in TEMPLATE_IDS]
+        ordinary_unit = CreditCostCalculator.calculate("generate", self.state.backend, 1, 1)
+        items = [template(key) for key in TEMPLATE_IDS]
+        return [{**item, "image_count": len(item["slots"]),
+                 "original_credit": ordinary_unit * len(item["slots"]),
+                 "package_credit": (ordinary_unit // 2) * len(item["slots"]),
+                 "unit_credit": ordinary_unit // 2} for item in items]
 
     def plan(self, template_id, product, model_description=""):
         item = next(value for value in self.catalog() if value["id"] == template_id)
@@ -57,7 +60,7 @@ class EcommerceSuites:
                 tasks.append(self.state.logical_task_view(slot["task_id"], main_project_id=project_id))
             except FileNotFoundError:
                 tasks.append({"task_id": slot["task_id"], "name": slot["name"], "status": "preparing", "outputs": []})
-        return {**record, "tasks": tasks}
+        return {**record, "image_count": len(record["slots"]), "tasks": tasks}
 
     def list(self, project_id):
         directory = self._path(project_id, "0" * 32).parent
@@ -65,8 +68,8 @@ class EcommerceSuites:
 
     def submit(self, project_id, *, request_id, template_id, subproject_id, reference_artifact_ids, prompts):
         item = next(value for value in self.catalog() if value["id"] == template_id)
-        if len(prompts) != 15 or any(not p.strip() or len(p) > 12000 for p in prompts):
-            raise ValueError("请提供十五条非空提示词，每条最多12000字")
+        if any(not p.strip() or len(p) > 12000 for p in prompts):
+            raise ValueError("请提供非空提示词，每条最多12000字")
         if not reference_artifact_ids or len(set(reference_artifact_ids)) != len(reference_artifact_ids):
             raise ValueError("请提供商品参考图，不能重复")
         sub = self.state.projects.get_subproject(subproject_id)
@@ -85,6 +88,8 @@ class EcommerceSuites:
                 if record["fingerprint"] != fingerprint:
                     raise ConflictError("套餐提交内容已改变，请新建套餐")
             else:
+                if len(prompts) != len(item["slots"]):
+                    raise ConflictError("套餐内容已更新，请刷新页面后重新展开模板")
                 record = {"schema_version": 1, "suite_id": request_id, "project_id": project_id, "subproject_id": subproject_id,
                           "template_id": template_id, "template_version": item["version"], "name": item["name"],
                           "fingerprint": fingerprint, "created_at": _now(), "status": "preparing",
@@ -112,7 +117,7 @@ class EcommerceSuites:
                                  "action": "generate", "confirmed": True, "restore_execution_id": None,
                                  "previous_execution_id": None, "execution_id": None, "status": "queued",
                                  "failure_type": None, "created_at": _now(), "started_at": None, "finished_at": None})
-                jobs = self.state.identity.reserve_many(jobs, owner, [record["unit_credit"]] * 15)
+                jobs = self.state.identity.reserve_many(jobs, owner, [record["unit_credit"]] * len(record["slots"]))
                 for job in jobs:
                     # A retried response must not overwrite a running/settled outbox job.
                     current = self.state.get_job(pid, job["task_id"])

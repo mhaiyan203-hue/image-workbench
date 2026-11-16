@@ -26,7 +26,7 @@
       <a class="nav-item video-nav-entry" href="/scripts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM15 3v5h4M9 12h7M9 16h7"/></svg><span>脚本与剧本</span></a>
       <a class="nav-item video-nav-entry" href="/video"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 9 5-3v12l-5-3z"/></svg><span>视频工作台</span></a>
       {% endif %}
-      <a class="nav-item" href="/ecommerce"><span>电商套图 · 15 张五折</span></a>
+      <a class="nav-item" href="/ecommerce"><span>电商套图模板 · 五折</span></a>
       <div class="project-heading"><span class="side-label">项目</span><button id="newProjectButton" class="icon-button light-icon" type="button" aria-label="创建项目" title="创建项目">+</button></div>
       <div class="project-filter"><button id="archiveFilter" class="text-button" type="button">查看已归档项目</button></div>
       <div id="projectList" class="project-list" aria-live="polite"></div>
@@ -49,6 +49,18 @@
         <section id="welcomeRow" class="welcome-row">
           <div><div class="eyebrow"><span class="eyebrow-line"></span>创作空间</div><h1 id="pageHeading">把想法变成图像</h1><p>整理需求，直接生成，或保存多个任务后批量创作。</p></div>
           <div class="welcome-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        </section>
+
+        <section class="suite-showcase" aria-labelledby="suiteShowcaseTitle">
+          <div class="suite-showcase-heading"><div><span class="eyebrow">电商套图模板</span><h2 id="suiteShowcaseTitle">选一个模板，生成整套图</h2><p>为 Amazon／独立站准备：主图、细节、场景，张张各有用途。</p></div><span class="suite-discount">整套五折</span></div>
+          <div class="suite-showcase-cards">
+            {% for template in ecommerce_templates %}
+            <a class="suite-showcase-card" href="/ecommerce?template={{ template.id }}">
+              <img src="/static/ecommerce-examples/{{ template.id }}/cover.webp" alt="{{ template.name }}案例预览" width="300" height="200">
+              <div class="suite-showcase-copy"><span class="suite-count">{{ template.image_count }} 张 / 套 · {{ '带模特' if template.with_model else '无人物' }}</span><h3>{{ template.name }}</h3><p>{{ '上身版型 · 面料工艺 · 日常穿搭' if template.with_model else '白底主图 · 材质结构 · 使用场景' }}</p><div class="suite-showcase-bottom"><span><strong>{{ template.package_credit }} 积分</strong> <del>{{ template.original_credit }}</del></span><span class="suite-use">使用模板 →</span></div></div>
+            </a>
+            {% endfor %}
+          </div>
         </section>
 
         <section id="mainOverview" class="main-overview" hidden>

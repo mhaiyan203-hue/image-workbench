@@ -11,6 +11,7 @@ from image_workbench import StorageConfig, StorageManager, LocalFileBackend
 from image_workbench.web import create_app
 from image_workbench.worker import LocalWorker
 from image_workbench.capacity import CapacityPolicy
+from image_workbench.ecommerce_suites import template
 from image_workbench.prompt_enhancement_skills import PromptSkillRegistry
 
 
@@ -35,7 +36,7 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.state = self.app.scoped_app(self.aid, self.me["workspace_id"]).state.workbench
         self.path = f"/api/main-projects/{self.mid}/suites"
         self.body = {"request_id": uuid4().hex, "template_id": "small-product", "subproject_id": self.sid,
-                     "reference_artifact_ids": self.refs, "prompts": [f"商品静物图 {i}" for i in range(15)], "confirm_generation": True}
+                     "reference_artifact_ids": self.refs, "prompts": [f"商品静物图 {i}" for i in range(7)], "confirm_generation": True}
 
     def user(self, name):
         c = TestClient(self.app, base_url="http://localhost", raise_server_exceptions=False)
@@ -57,7 +58,7 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.assertEqual(len(response.json()["templates"]), 2)
         registry = PromptSkillRegistry()
         for item in response.json()["templates"]:
-            self.assertEqual((len(item["slots"]), item["original_credit"], item["package_credit"]), (15, 900, 450))
+            self.assertEqual((len(item["slots"]), item["original_credit"], item["package_credit"]), (7, 420, 210))
             self.assertIsNotNone(registry.get(item["editing_skill_id"]))
             plan = self.client.post("/api/ecommerce/plan", json={"template_id": item["id"], "product": "真实商品信息"})
             self.assertEqual(plan.status_code, 200, plan.text)
@@ -68,7 +69,7 @@ class EcommerceSuiteTests(unittest.TestCase):
     def test_insufficient_balance_rolls_back_entire_suite(self):
         response = self.client.post(self.path, json=self.body)
         self.assertEqual(response.status_code, 402, response.text)
-        self.assertEqual(response.json()["expected_credit"], 450)
+        self.assertEqual(response.json()["expected_credit"], 210)
         self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 0)
         self.assertEqual(self.app.identity.pending_jobs(), [])
         tasks = self.client.get(self.path).json()["suites"][0]["tasks"]
@@ -77,16 +78,16 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.assertEqual(direct.status_code, 409)
         self.fund()
         self.assertEqual(self.client.post(self.path, json=self.body).status_code, 200)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 210)
 
     def test_idempotence_settlement_download_and_isolation(self):
         self.fund()
         response = self.client.post(self.path, json=self.body)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(len(response.json()["tasks"]), 15)
+        self.assertEqual(len(response.json()["tasks"]), 7)
         self.assertEqual(self.client.post(self.path, json=self.body).status_code, 200)
-        self.assertEqual(len(self.app.identity.pending_jobs()), 15)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        self.assertEqual(len(self.app.identity.pending_jobs()), 7)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 210)
         self.assertEqual({t["estimated_credit"] for t in response.json()["tasks"]}, {30})
         worker = LocalWorker(self.app.state.workbench, LocalFileBackend([self.image]))
         self.assertTrue(worker.run_next())
@@ -99,7 +100,7 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.assertEqual(other.get(self.path).status_code, 404)
         self.assertEqual(other.post(self.path, json=self.body).status_code, 404)
         self.assertEqual(other.get(self.path + '/' + self.body["request_id"] + '/download').status_code, 404)
-        altered = {**self.body, "prompts": ["changed"] * 15}
+        altered = {**self.body, "prompts": ["changed"] * 7}
         self.assertEqual(self.client.post(self.path, json=altered).status_code, 409)
 
     def test_failure_refunds_discounted_unit_and_retry_keeps_price(self):
@@ -108,14 +109,14 @@ class EcommerceSuiteTests(unittest.TestCase):
         job = self.app.identity.pending_jobs()[0]
         job.update(status="failed", failure_type="backend_error")
         self.app.state.workbench.save_job(job)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 420)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 180)
         response = self.client.post(f"/api/tasks/{job['task_id']}/run", json={"request_id": uuid4().hex, "confirm_generation": True, "retry_of": job["job_id"]})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 210)
 
     def test_capacity_failure_rolls_back_and_recovery_uses_outbox(self):
         self.fund()
-        self.state.identity.capacity_policy = CapacityPolicy(max_daily_submitted_credit=400)
+        self.state.identity.capacity_policy = CapacityPolicy(max_daily_submitted_credit=200)
         response = self.client.post(self.path, json=self.body)
         self.assertEqual(response.status_code, 429, response.text)
         self.assertEqual(self.app.identity.pending_jobs(), [])
@@ -123,9 +124,9 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.state.identity.capacity_policy = CapacityPolicy()
         with patch.object(self.state, "save_job", side_effect=OSError("simulated interruption")):
             self.assertEqual(self.client.post(self.path, json=self.body).status_code, 500)
-        self.assertEqual(len(self.app.identity.pending_jobs()), 15)
+        self.assertEqual(len(self.app.identity.pending_jobs()), 7)
         self.assertEqual(self.client.post(self.path, json=self.body).status_code, 200)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 210)
 
     def test_suite_occupies_one_pending_submission_slot(self):
         self.fund()
@@ -134,9 +135,32 @@ class EcommerceSuiteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         second = self.client.post(self.path, json={**self.body, "request_id": uuid4().hex})
         self.assertEqual(second.status_code, 429, second.text)
-        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
-        self.assertEqual(len(self.app.identity.pending_jobs()), 15)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 210)
+        self.assertEqual(len(self.app.identity.pending_jobs()), 7)
 
     def test_client_cannot_override_price_or_count(self):
-        for extra in ({"package_credit": 1}, {"prompts": ["x"] * 14}, {"confirm_generation": False}):
+        for extra in ({"package_credit": 1}, {"confirm_generation": False}):
             self.assertEqual(self.client.post(self.path, json={**self.body, **extra}).status_code, 422)
+
+        for count in (6, 8, 15):
+            self.assertEqual(self.client.post(self.path, json={**self.body, "prompts": ["x"] * count}).status_code, 409)
+        self.assertEqual(self.app.identity.pending_jobs(), [])
+
+    def test_legacy_fifteen_image_purchase_resumes_at_original_snapshot_price(self):
+        legacy = template("small-product")
+        legacy["version"] = 1
+        legacy["slots"] = [{"id": f"{i + 1:02d}", "name": f"历史图片{i + 1}", "prompt": "商品"} for i in range(15)]
+        body = {**self.body, "prompts": ["历史商品图"] * 15}
+        with patch("image_workbench.ecommerce_suites.template", side_effect=lambda key: legacy if key == "small-product" else template(key)):
+            initial = self.client.post(self.path, json=body)
+        self.assertEqual(initial.status_code, 402, initial.text)
+        self.assertEqual(initial.json()["expected_credit"], 450)
+        self.fund()
+        resumed = self.client.post(self.path, json=body)
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        self.assertEqual((resumed.json()["image_count"], resumed.json()["package_credit"], resumed.json()["template_version"]), (15, 450, 1))
+        self.assertEqual(len(resumed.json()["tasks"]), 15)
+        self.assertEqual(self.client.post(self.path, json=body).status_code, 200)
+        self.assertEqual(self.app.identity.wallet(self.aid)["frozen_credit"], 450)
+        history = self.client.get(self.path).json()["suites"][0]
+        self.assertEqual((history["image_count"], history["package_credit"]), (15, 450))

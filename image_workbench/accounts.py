@@ -85,6 +85,10 @@ class IdentityStore:
                 email TEXT, password_hash TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('active','disabled')), is_admin INTEGER NOT NULL DEFAULT 0,
                 activation_hash TEXT);
+            CREATE TABLE IF NOT EXISTS image_trial_accounts (
+                account_id TEXT PRIMARY KEY REFERENCES accounts,
+                batch_id TEXT NOT NULL, initial_credit INTEGER NOT NULL CHECK(initial_credit > 0),
+                created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS workspaces (
                 workspace_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts,
                 name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, storage_root TEXT NOT NULL);
@@ -148,16 +152,48 @@ class IdentityStore:
     def public_account(row):
         return {key: row[key] for key in ("account_id", "username", "email", "created_at", "updated_at", "status", "is_admin")}
 
-    def _account(self, db, username, encoded, *, admin=False, activation=None):
+    def _account(self, db, username, encoded, *, admin=False, activation=None, initial_credit=200):
         if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_\-]{3,40}", username):
             raise ValueError("用户名需要 3–40 个英文字母、数字、下划线或连字符")
         aid, wid, stamp = uuid4().hex, uuid4().hex, _now()
         db.execute("INSERT INTO accounts VALUES (?,?,?,?,?,?,'active',?,?)", (aid, username, None, encoded, stamp, stamp, int(admin), activation))
         # storage_root 是逻辑空间根；稳定图片仍通过 project_ownership + StorageManager 解析。
         db.execute("INSERT INTO workspaces VALUES (?,?,?,?,?,?)", (wid, aid, username + " 的工作空间", stamp, stamp, "."))
-        db.execute("INSERT INTO credit_accounts VALUES (?,?,0,0,?,?)", (aid, 0 if admin else 200, int(admin), stamp))
-        self._ledger(db, aid, wid, None, None, "initial_grant", 0 if admin else 200)
+        db.execute("INSERT INTO credit_accounts VALUES (?,?,0,0,?,?)", (aid, 0 if admin else initial_credit, int(admin), stamp))
+        self._ledger(db, aid, wid, None, None, "initial_grant", 0 if admin else initial_credit)
         return aid, wid
+
+    def provision_image_trials(self, entries, *, batch_id, initial_credit=8000):
+        """Trusted operator entry: one atomic batch; retry never grants credits twice."""
+        _validate_id(batch_id)
+        if type(initial_credit) is not int or initial_credit < 1:
+            raise ValueError("初始积分必须为正整数")
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 1000:
+            raise ValueError("请提供1至1000个账号")
+        names = [item.get("username") for item in entries]
+        if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_\-]{3,40}", name)
+               or name.lower() == "moy" for name in names):
+            raise ValueError("试用账号名称无效")
+        if len({name.lower() for name in names}) != len(names):
+            raise ValueError("试用账号名称重复")
+        encoded = [password_hash(item.get("password")) for item in entries]
+        with self.transaction() as db:
+            rows = db.execute("SELECT a.account_id,a.username,t.initial_credit FROM image_trial_accounts t "
+                              "JOIN accounts a USING(account_id) WHERE t.batch_id=? ORDER BY a.username", (batch_id,)).fetchall()
+            if rows:
+                if ({row["username"] for row in rows} != set(names)
+                        or any(row["initial_credit"] != initial_credit for row in rows)):
+                    raise ValueError("该批次已存在且内容不同")
+                return [dict(row) for row in rows]
+            for name in names:
+                if db.execute("SELECT 1 FROM accounts WHERE username=?", (name,)).fetchone():
+                    raise ValueError("试用账号名称已存在，未创建任何账号")
+            result = []
+            for name, secret in zip(names, encoded, strict=True):
+                aid, _ = self._account(db, name, secret, initial_credit=initial_credit)
+                db.execute("INSERT INTO image_trial_accounts VALUES (?,?,?,?)", (aid, batch_id, initial_credit, _now()))
+                result.append({"account_id": aid, "username": name, "initial_credit": initial_credit})
+            return result
 
     def bootstrap(self, project_ids):
         """本机受控迁移入口。预留 moy；普通注册绝不能认领历史项目。"""
@@ -287,7 +323,10 @@ class IdentityStore:
         if not token or len(token) > 128:
             return None
         with self.connect() as db:
-            row = db.execute("SELECT s.*,a.username,a.status,a.is_admin FROM sessions s JOIN accounts a USING(account_id) WHERE token_hash=? AND expires>? AND a.status='active'", (digest(token), time.time())).fetchone()
+            row = db.execute("SELECT s.*,a.username,a.status,a.is_admin, "
+                             "CASE WHEN t.account_id IS NOT NULL AND a.is_admin=0 THEN 1 ELSE 0 END AS image_only "
+                             "FROM sessions s JOIN accounts a USING(account_id) LEFT JOIN image_trial_accounts t USING(account_id) "
+                             "WHERE token_hash=? AND expires>? AND a.status='active'", (digest(token), time.time())).fetchone()
         return dict(row) if row else None
 
     def logout(self, token):

@@ -110,3 +110,8 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 | `GET /api/video/projects/{pid}/assets/{asset_id}/thumbnail` | JPEG，长边不超过 320px | 原资产身份/Workspace 校验，private 缓存；不改变原图与执行器输入 |
 
 网页提交前显示模式、参考图数、时长、尺寸与积分。T2V 有已选参考图时阻止保存，要求用户明确切换模式或取消选择。付费执行仍只有显式确认才提交原 `/run` 接口。
+
+
+## 图片内测账号权限（2026-11-11）
+
+`GET /api/auth/me` 兼容性新增 `image_only: boolean`。服务端根据账号批次表及管理员身份决定该值，普通注册和请求参数不能设置。受限账号访问 `/scripts`、`/video`、`/api/scripts`、`/api/video`、`/api/storyboards` 及其子路径返回 HTTP 403，错误码 `feature_not_enabled`。图片和提示词增强接口保持可用；工作区切换不改变限制；管理员和无批次标记的历史账号权限保持原样。Worker端点仍使用原有独立鉴权。详见 [图片试用账号](image_trials_20261111.md)。

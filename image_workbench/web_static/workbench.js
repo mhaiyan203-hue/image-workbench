@@ -690,15 +690,15 @@
         catch (error) { toast('图片对比暂时不可用，请重新打开或下载原图查看。', true); }
       }});
     }
-    items.push({ label: '用于视频生成', run: () => sendArtifactToVideo(artifact, 'video') });
+    if (!state.account?.image_only) items.push({ label: '用于视频生成', run: () => sendArtifactToVideo(artifact, 'video') });
     items.push({ label: '设为参考图', run: async () => {
       const context = imageContext();
       if (!context) throw new Error('请先打开一个子项目，再添加图片。');
       await attachImages([artifact], 'reference', context);
     }});
-    items.push({ label: '设为首帧', run: () => sendArtifactToVideo(artifact, 'first') });
-    items.push({ label: '设为尾帧', run: () => sendArtifactToVideo(artifact, 'last') });
-    items.push({ label: '加入素材暂存区', run: () => sendArtifactToVideo(artifact, 'video', false) });
+    if (!state.account?.image_only) items.push({ label: '设为首帧', run: () => sendArtifactToVideo(artifact, 'first') });
+    if (!state.account?.image_only) items.push({ label: '设为尾帧', run: () => sendArtifactToVideo(artifact, 'last') });
+    if (!state.account?.image_only) items.push({ label: '加入素材暂存区', run: () => sendArtifactToVideo(artifact, 'video', false) });
     return items;
   }
   function safeDownloadName(value, fallback) {

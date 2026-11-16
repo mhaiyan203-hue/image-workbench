@@ -20,3 +20,5 @@
 .storyboard-multi-select input { width:auto; }
 .storyboard-shot>button[aria-pressed] { flex:1; text-align:left; }
 .storyboard-linked-stage { padding:8px 0; }
+
+.storyboard-progress:not(:empty){padding:14px;border:1px solid currentColor;border-radius:10px;font-weight:600}.storyboard-progress a{display:block;margin-top:8px}.storyboard-panel[aria-busy="true"]>h3::after{content:" · 规划中"}

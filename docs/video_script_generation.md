@@ -1,5 +1,7 @@
 # Video Script Generation — 实现与验收
 
+> 历史记录：下文保留 2026-10-16 起的 Codex 文本执行、目录和价格验收。当前脚本与分镜使用 DeepSeek Flash API，模型配置来自 `config/deepseek/`；API 装配、密钥和 Worker 启动见 [当前 API 流程](api_runtime.md)。下文“默认关闭”“未配置”等状态只描述当时环境。
+
 2026-10-16。已实现独立的脚本／剧本 Skill、后端服务和 `/scripts` 页面，入口位于侧栏“脚本与剧本”。后续 H3 整合已加入云端文本队列和本机 Codex 执行器，`/video` 也可生成或上传 TXT；见 [H3 三步创作流程](h3_pipeline.md)。下文的初始验收记录保留当时的测试范围，线上版本以发布证据为准。
 
 ## 1. 原有模型架构

@@ -35,8 +35,11 @@ def runtime_files(root):
     if (root / "image_workbench" / "script_service.py").is_file():
         paths.extend(root / "config" / name for name in ("script_models.json", "script_pricing.json", "script_routing.json"))
         skill = root / "skills" / "video-script-generation"
-        if not (skill / "registry" / "templates.json").is_file():
-            raise ValueError("脚本生成模板目录缺失")
+        required = ("registry/templates.json", "SKILL.md", "references/script-craft.md",
+                    "references/screenplay-craft.md", "references/SOURCES.json", "NOTICE.txt",
+                    "licenses/drama-skills.txt", "licenses/vimax.txt", "licenses/toonflow.txt")
+        if any(not (skill / name).is_file() for name in required):
+            raise ValueError("脚本生成模板或 Skill 资源缺失")
         for path in sorted(skill.rglob("*")):
             if path.is_symlink():
                 raise ValueError("脚本模板目录不允许符号链接")
@@ -45,8 +48,22 @@ def runtime_files(root):
                     raise ValueError("脚本模板目录含非发布文件")
                 paths.append(path)
     if (root / "image_workbench" / "storyboard_planner.py").is_file():
-        paths.append(root / "skills" / "storyboard-planning" / "SKILL.md")
+        paths.extend(root / "skills" / "storyboard-planning" / name for name in (
+            "SKILL.md", "references/shot-design.md", "references/continuity.md", "references/SOURCES.json",
+            "NOTICE.txt", "licenses/drama-skills.txt", "licenses/vimax.txt", "licenses/toonflow.txt", "licenses/minimax-h3.txt"))
         paths.append(root / "config" / "storyboard_pricing.json")
+    if (root / "image_workbench" / "image_prompting.py").is_file():
+        skill = root / "skills" / "image-generation-default"
+        paths.extend(skill / name for name in ("SKILL.md", "styles.json", "references/sources.md"))
+    if (root / "image_workbench" / "h3_skill.py").is_file():
+        paths.extend(root / "skills" / "h3-video-workflow" / name for name in (
+            "SKILL.md", "references/base-en.txt", "references/ref-en.txt", "references/SOURCES.json", "LICENSE", "NOTICE"))
+        paths.append(root / "config" / "h3_workflow.json")
+    if (root / "image_workbench" / "deepseek_text.py").is_file():
+        paths.extend(root / "config" / "deepseek" / name for name in (
+            "script_models.json", "script_pricing.json", "script_routing.json", "storyboard_pricing.json"))
+    if (root / "image_workbench" / "seedance_skill.py").is_file():
+        paths.extend(root / "skills" / "seedance-2-video" / name for name in ("SKILL.md", "SOURCES.md"))
     if (root / "image_workbench" / "prompt_enhancement.py").is_file():
         paths.append(root / "config" / "prompt_enhancement.json")
         prompts = root / "skills" / "prompt-enhancement" / "skills"

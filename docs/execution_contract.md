@@ -1,8 +1,24 @@
 # 第二阶段：本地任务执行接口
 
+兼容扩展（2026-10-22）：网站保存任务时在附加记录中冻结默认图片 Skill 与可选风格的提示词快照。
+本地 `TaskRunner` 在构造 `BackendRequest` 时使用该快照的 `compiled_prompt`，远程 `RemoteQueue` 在现有
+`task.prompt` 字段传送同一文本。原始磁盘 Task 不改写，其他传输字段不变，旧执行器仍可读取；
+旧任务没有快照时在执行边界应用当前默认 Skill。`work/request.json` 保存实际传给后端的提示词。
+这一步不调用额外模型，不增加图片次数，不改变提交确认、积分、恢复、重试和归档行为。
+`retry_archive` 不经过生图提示词整理或模型调用。详见 [图片默认 Skill](image_generation_skill.md)。
+
 本阶段仍是可信本地脚本、单进程顺序调用，不提供网页或账号权限。
 执行链固定为 `TaskRunner → ImageBackend → 本次产物 → StorageManager`。
-不调用额外付费图片 API，不自动重试生成，不修改 Codex 全局配置或登录方式。
+默认 Codex 后端不调用额外付费图片 API，不自动重试生成，不修改 Codex 全局配置或登录方式。
+2026-10-23 新增显式选择的 `image-api` 后端；配置、付费调用边界和验证状态见
+[图片 API 接入](image_api_integration.md)。旧后端与默认值保留。
+
+图片 API 的重试扩展（2026-10-23）：用户明确授权相同内容失败重试，Provider 在一次执行内
+对明确可重试的响应及连接建立失败最多尝试 3 次；固定同一请求正文，总时限包含等待和全部尝试。
+`api-request.json` 增加 `max_attempts`、`request_sha256`，`api-response.json` 增加尝试数组及次数。
+不新建 Task、Execution 或积分预约，成功后结算一次，全失败时按原规则退款。鉴权/参数错误、
+结果未知的传输失败、成功响应的无效产物不自动再生成；重启恢复仍只重传原结果。
+并发仅启用原远程队列的执行位配置和独立 Worker 实例，不改变数据格式、归属、幂等或恢复规则。
 
 ## 接口（独立测试据此编写）
 
@@ -163,6 +179,16 @@ ExecutionRecord 新增 failure_type、timing_events 以及 prepare/backend/codex
 任务继续按原规则执行、恢复和结算。停用不等于撤销已有授权，也不改变恢复为“重新生成”。
 详见 [插件试点合同](architecture/PLUGIN_PILOT.md) 与 `tests/test_plugins.py`。
 
+## H3 内置 Skill 调用（2026-10-22）
+
+`h3-worker` 默认装配 `h3-video-workflow`，新任务在本机参数／参考图校验后、ComfyUI 提交前，使用 `gpt-6-luna` 和 Codex `service_tier="fast"` 整理单镜提示词。思考强度为独立配置。模型不负责 GPU 提交、路径、积分和归档；文本输出只能改变提示词，其余已确认字段必须保持一致。
+
+本地 journal 新增可选 `skill_request`、`skill_plan`、`skill_error`；不改变服务端作业、HTTP 或积分协议。`skill_request` 保存完整 Skill 输入和模型配置；调用前持久化 `skill/invocation.json`，完成后沿用文本适配器的内容哈希凭据，并要求 `requested_service_tier=fast`。该字段证明请求配置，不证明服务端实际分配的处理档位。
+
+官方指南接入后，新 `skill_request` 另外保存 `prompt_format=minimax-h3-official-v1`、官方模式 `prompt_mode` 和所用指南 `guide_sha256`，完整指南正文已经包含在冻结的 `prompt` 中。仅带此格式版本的请求要求生成正文具有顺序正确且非空的官方三段／六段字段。更新本地 Skill 或指南不改写已有请求；没有此标记的旧文本凭据仍按原约定恢复，不补跑 Luna 或用新格式追溯拒绝旧结果。发布包必须同时携带两份指南、来源记录、许可与 NOTICE。
+
+已完成文本的重启恢复只校验原凭据，不再次调用模型。完成状态不明时仍处于 ComfyUI 提交前的 `ready`，执行器返回 `uncertain`，服务端保留已领取的运行状态和积分冻结；原凭据恢复后可继续同一任务。明确失败或输出不符合约束则按原失败流程结算，不提交视频。缺少 `skill_request` 的旧 journal 不插入调用，已提交图只对账与回收。覆盖见 `tests/test_h3_skill.py`、`tests/test_h3_worker.py`、`tests/test_script_adapter.py`。
+
 ## 脚本到分镜的独立协调与只读诊断（2026-10-22）
 
 `ScriptStoryboardWorkflow` 负责两阶段选项/报价计划、完成后的规划触发和启动补偿。ScriptService
@@ -176,3 +202,15 @@ StoryboardService 接收脚本源版本读取函数；任务事务、模型执�
 与正文一致时才列出恢复归档动作；部分文件或受损回执不会被当作成功证据。
 图片、脚本、视频原有 uncertain/重试/人工确认规则保持，不由查询触发自动恢复或推理。
 
+
+## 在线视频执行与恢复
+
+在线视频 2.0 的执行器在提交前持久化意图，回执到达后持久化供应方任务号，重启时只查询原任务。提交结果未知时设为 uncertain 并保留冻结积分，不自动重复提交；明确拒绝或失败才释放积分。成片处理后先持久化字节及摘要，再经原视频上传和结算接口回传，回传中断时复用相同字节。旧视频和执行器默认使用 H3。在线参考图依赖可由供应方访问的域名，当前不提供；不得公开现有受保护素材来绕过限制。
+
+在线执行器属于视频模块的 Provider 执行端，通过既有视频服务、存储和账本接口协作，不修改共享 Core。分镜新增的可选 `backend` 不要求迁移历史记录；旧记录按 H3 解释。回滚前应停止接收新的在线任务并处理已受理任务，再停用在线执行器并回退代码；保留其 journal 和原任务结果作为恢复证据。
+
+## 在线视频的 H3 Skill 阶段
+
+新建在线任务先由本机已登录的 Codex 文本执行器领取 planning 阶段，复用 `H3SkillPlanner`、官方指南和 gpt-6-luna fast，冻结 Skill 输入并按原凭据恢复。服务端校验计划不得改变分镜参数，保存后将同一预约交给云端 2.0 执行器；云端只使用 Skill 产出的提示词，不调用本机 H3。Skill 明确失败则释放积分；结果不明保留预约和检查点，不重复调用。已受理的旧任务不插入新阶段。
+
+生产可设置 `IMAGE_WORKBENCH_DISABLE_H3_SUBMISSIONS=1` 禁止新提交本机 H3 任务并在页面隐藏入口，旧任务及其恢复继续按原后端处理。旧 H3 分镜需重建为在线视频分镜。planning worker 需要运行在原 Codex 登录机器；视频的供应方提交、轮询和回传在云端执行。

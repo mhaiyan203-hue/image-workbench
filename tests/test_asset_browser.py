@@ -56,6 +56,7 @@ class AssetBrowserTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.storage = StorageManager(StorageConfig(data_root=self.root / "data"))
         self.app = create_app(self.storage, backend="local")
+        self.app.video_store.enabled_backends = ("h3", "online-2.0")  # Exercise legacy accepted work and clients.
         identity = self.app.identity
         with identity.transaction() as db:
             self.aid, self.wid = identity._account(db, "asset_browser", None)
@@ -161,7 +162,14 @@ class AssetBrowserTests(unittest.TestCase):
     def selected_root_assets(self, count):
         expect(self.page.locator("#filePreviewList .file-tile")).to_have_count(count)
 
-    def save_root_task(self):
+    def save_root_task(self, *, generate=True):
+        if not generate:
+            with self.page.expect_response(lambda response: response.request.method == "POST"
+                                           and response.url.endswith(f"/api/subprojects/{self.link['subproject_id']}/tasks")) as saved:
+                self.page.locator("#saveDraftTaskButton").click()
+            self.assertEqual(saved.value.status, 200, saved.value.text())
+            expect(self.page.locator("#promptInput")).to_have_value("")
+            return saved.value.json()
         with self.page.expect_response(lambda response: response.request.method == "POST"
                                        and response.url.endswith(f"/api/subprojects/{self.link['subproject_id']}/tasks")) as saved:
             with self.page.expect_response(lambda response: response.request.method == "POST"
@@ -175,6 +183,34 @@ class AssetBrowserTests(unittest.TestCase):
         self.last_run = run_response.json()
         expect(self.page.locator("#promptInput")).to_have_value("")
         return response.json()
+
+    def test_current_task_references_drop_remove_and_hidden_libraries(self):
+        self.video()
+        self.page.locator('[data-pipeline-tab="image"][data-mode="upload"]').click()
+        expect(self.page.locator('#assetTray')).to_be_hidden()
+        expect(self.page.locator('#videoAssetGrid')).to_be_hidden()
+        expect(self.page.locator('#pipelineChooseImages')).to_be_hidden()
+        self.assertTrue(self.event('drop', ('red', 'blue'), '#pipelineImages'))
+        self.idle()
+        expect(self.page.locator('#pipelineImageReferences input:checked')).to_have_count(2)
+        self.page.locator('#pipelineImageReferences').get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        expect(self.page.locator('#pipelineImageReferences img')).to_have_count(1)
+        expect(self.page.locator('#videoAssetCount')).to_have_text('1 张')
+        # Polling must not repopulate the current selection from archived assets.
+        self.page.evaluate('() => window.IWVideo.refresh()')
+        expect(self.page.locator('#pipelineImageReferences img')).to_have_count(1)
+        self.assertEqual(len(self.get(f'/api/video/projects/{self.pid}')['assets']), 2)
+        self.page.locator('[data-pipeline-step="video"]').click()
+        self.assertTrue(self.event('drop', ('red', 'blue', 'green'), '#videoShotForm'))
+        self.idle()
+        expect(self.page.locator('#videoReferenceChoices input:checked')).to_have_count(3)
+        self.page.locator('#videoMode').select_option('I2V')
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 red.png', exact=True).click()
+        expect(self.page.locator('#videoReferenceChoices img')).to_have_count(2)
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 blue.png', exact=True).click()
+        self.page.locator('#videoReferenceChoices').get_by_role('button', name='移除参考图 green.png', exact=True).click()
+        expect(self.page.locator('#videoReferenceChoices img')).to_have_count(0)
+        self.assertEqual(self.page.evaluate('() => window.IWVideo.snapshot().referenceOrder'), [])
 
     def test_video_paste_upload_drop_deduplicate_and_artifact(self):
         self.video()
@@ -238,9 +274,14 @@ class AssetBrowserTests(unittest.TestCase):
         self.idle()
         self.event(colors=("blue",))
         self.idle()
+        expect(self.page.locator("#videoNotice")).to_contain_text("最多选择 1 张")
+        expect(self.page.locator("#videoReferenceChoices input:checked")).to_have_count(1)
+        self.page.locator("#videoMode").select_option("FL2V")
+        self.event(colors=("blue",))
+        self.idle()
         expect(self.page.locator("#videoReferenceChoices input:checked")).to_have_count(2)
         expect(self.page.locator(".video-reference-order").filter(has_text="首帧")).to_have_count(1)
-        expect(self.page.locator(".video-reference-order").filter(has_text="末帧")).to_have_count(1)
+        expect(self.page.locator(".video-reference-order").filter(has_text="尾帧")).to_have_count(1)
         original = self.page.evaluate("() => [...window.IWVideo.snapshot().referenceOrder]")
         self.event(colors=("green",))
         self.idle()

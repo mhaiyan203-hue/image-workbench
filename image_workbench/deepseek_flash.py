@@ -12,6 +12,8 @@ import socket
 import urllib.error
 import urllib.request
 
+from .deepseek_text import ENDPOINT, MODEL, api_key
+
 CONFIG_ROOT = Path(__file__).resolve().parent.parent / "config"
 MAX_RESPONSE_BYTES = 256 * 1024
 
@@ -43,9 +45,12 @@ class DeepSeekFlashClient:
             raise FlashConfigError("incomplete") from exc
         if not config.get("enabled"):
             raise FlashConfigError("disabled")
-        endpoint = os.environ.get(config.get("endpoint_env", ""), "")
-        model = os.environ.get(config.get("model_env", ""), "")
-        key = os.environ.get(config.get("api_key_env", ""), "")
+        endpoint = os.environ.get(config.get("endpoint_env", ""), "").strip() or ENDPOINT
+        model = os.environ.get(config.get("model_env", ""), "").strip() or MODEL
+        try:
+            key = os.environ.get(config.get("api_key_env", ""), "").strip() or api_key()
+        except (OSError, ValueError, TypeError) as exc:
+            raise FlashConfigError("incomplete") from exc
         if not endpoint.startswith("https://") or not model or not key:
             raise FlashConfigError("incomplete")
         return {"endpoint": endpoint, "model": model, "api_key": key,
@@ -54,6 +59,7 @@ class DeepSeekFlashClient:
     def complete(self, *, system, user, max_tokens=300, temperature=0, timeout=None):
         settings = self.settings()
         payload = {"model": settings["model"], "temperature": temperature, "max_tokens": max_tokens,
+                   "thinking": {"type": "disabled"}, "stream": False,
                    "response_format": {"type": "json_object"},
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         request = urllib.request.Request(

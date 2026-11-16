@@ -41,7 +41,7 @@ def install_routes(app, service, templates):
             for i, task in enumerate(record["tasks"], 1):
                 for output in task.get("outputs", []):
                     path = service.storage.get_artifact_path(output["artifact_id"])
-                    if hashlib_sha256(path) != output["sha256"]:
+                    if hashlib_sha256(path) != service.storage.get_artifact(output["artifact_id"]).sha256:
                         raise ValueError("产物校验失败")
                     archive.write(path, f"{i:02d}-{output['artifact_id']}{path.suffix}")
                     count += 1

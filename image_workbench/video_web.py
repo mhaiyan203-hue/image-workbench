@@ -1,5 +1,6 @@
 """Authenticated H3 video routes mounted by AccountApplication."""
 from pathlib import Path
+import io
 from typing import Literal
 
 from fastapi import HTTPException, Request, UploadFile
@@ -7,6 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from PIL import Image, ImageOps
 
 from .storage import _validate_id
 from .video_store import VideoStore
@@ -34,6 +36,7 @@ class Shot(Body):
     aspect_ratio: Literal["landscape", "portrait", "square"]
     reference_ids: list[str] = Field(default_factory=list, max_length=9)
     resolution: Literal["720p", "1080p"] = "720p"
+    backend: Literal["h3", "online-2.0"] = "h3"
 
 
 class Run(Body):
@@ -45,6 +48,21 @@ class Run(Body):
 
 class Claim(Body):
     worker_id: str = Field(pattern=ID)
+    backend: Literal["h3", "online-2.0"] = "h3"
+    stage: Literal["generation", "planning"] = "generation"
+
+
+class Plan(Body):
+    plan: dict
+
+
+class Cancel(Body):
+    job_id: str = Field(pattern=ID)
+
+
+class ConfirmStopped(Body):
+    confirmed: Literal[True]
+    evidence: str = Field(min_length=1, max_length=2000)
 
 
 class Start(Body):
@@ -78,7 +96,8 @@ def install_video(app, store, pipeline=None):
         revision = max((directory / "web_static" / name).stat().st_mtime_ns for name in
                        ("video.css", "pipeline.css", "storyboard.css", "video.js", "pipeline.js", "storyboard.js",
                         "asset-input.css", "asset-input.js", "asset-actions.js", "script-pricing.js"))
-        return templates.TemplateResponse(request=request, name="video.html", context={"asset_version": str(revision)},
+        return templates.TemplateResponse(request=request, name="video.html", context={"asset_version": str(revision),
+                                          "legacy_h3_enabled": store.config()["local_h3_available"]},
                                           headers={"Cache-Control": "no-store"})
 
     @app.get("/api/video/config")
@@ -135,6 +154,34 @@ def install_video(app, store, pipeline=None):
     def create_shot(pid: str, body: Shot, request: Request):
         return store.create_shot(*owner(request), pid, **body.model_dump())
 
+    @app.get("/api/video/projects/{pid}/assets/{asset_id}/thumbnail")
+    def thumbnail(pid: str, asset_id: str, request: Request):
+        path, _ = store.asset_file(*owner(request), pid, asset_id)
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail((320, 320))
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="JPEG", quality=80)
+        return Response(buffer.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/video/projects/{pid}/shots/{sid}/cancel")
+    def cancel(pid: str, sid: str, body: Cancel, request: Request):
+        return store.cancel_queued(*owner(request), pid, sid, body.job_id)
+
+    @app.get("/api/video/uncertain-jobs")
+    def uncertain(request: Request):
+        try:
+            return {"jobs": store.uncertain_jobs(owner(request)[0])}
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+
+    @app.post("/api/video/jobs/{job_id}/confirm-stopped")
+    def confirm_stopped(job_id: str, body: ConfirmStopped, request: Request):
+        try:
+            return store.confirm_video_stopped(owner(request)[0], job_id, **body.model_dump())
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+
     @app.get("/api/video/projects/{pid}/shots/{sid}")
     def shot(pid: str, sid: str, request: Request):
         return store.shot(*owner(request), pid, sid)
@@ -152,7 +199,12 @@ def install_video(app, store, pipeline=None):
 
     @app.post("/api/worker/video/claim")
     def claim(body: Claim):
-        return {"job": store.claim(body.worker_id)}
+        return {"job": store.claim(body.worker_id) if body.backend == "h3" and body.stage == "generation"
+                else store.claim(body.worker_id, body.backend, body.stage)}
+
+    @app.post("/api/worker/video/jobs/{job_id}/plan")
+    def plan(job_id: str, body: Plan, request: Request):
+        return store.complete_plan(job_id, *worker(request), body.plan)
 
     @app.post("/api/worker/video/jobs/{job_id}/start")
     def start(job_id: str, body: Start, request: Request):

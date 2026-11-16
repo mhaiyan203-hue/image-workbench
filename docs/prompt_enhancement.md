@@ -45,17 +45,15 @@ Skill 选择是确定性 Python 评分，不由模型决定。结果必须是统
 
 ## 模型配置
 
-默认 `provider` 为 `"mock"`，离线演练不产生费用。真实轻量模型使用现有脚本路由配置
-`config/script_routing.json` 的 `deepseek_flash`（`enabled`、HTTPS endpoint、model、key 环境变量）。
-只有同时满足以下条件才会发起真实请求：
-
-1. `config/prompt_enhancement.json` 的 `provider` 改为 `deepseek`；
-2. `deepseek_flash.enabled` 为真且 endpoint/model/key 完整；
-3. 当前账号+Workspace 的预算检查通过。
+公网配置使用 `provider: "deepseek_flash"`，通过官方 `https://api.deepseek.com/chat/completions` 调用 `deepseek-flash`。
+提示词强化关闭思考模式，每次只发起一次 JSON 请求，复用脚本/分镜使用的 `DEEPSEEK_API_KEY` 或
+`IMAGE_WORKBENCH_TEXT_API_CONFIG` 指向的服务器凭据文件；密钥不随发布包上传、不返回前端。
+`config/script_routing.json` 的 `deepseek_flash.enabled` 控制启停；原有 `SCRIPT_DEEPSEEK_*` 环境变量仍可覆盖配置。
+离线测试显式注入 Mock；如需演练，可将 provider 改为 `mock`。
 
 尚未配置单价时，`usage.estimated_cost` 为 `null`，只记录调用次数与可用 Token；
 配置 `pricing.input_per_million` / `pricing.output_per_million` 后才计算预估成本。
-启用真实模型前应先由维护者确认额度与费用。
+小时/天调用预算继续由强化服务维护。
 
 ## 失败与回退码
 
@@ -130,6 +128,6 @@ Skill 选择是确定性 Python 评分，不由模型决定。结果必须是统
 ## 回滚
 
 1. 从 `composition.py` 移除 `install_prompt_enhancements` 注册，并移除模板中的脚本与面板；
-2. 删除或停用 `config/prompt_enhancement.json`（默认 Mock，不启用真实调用）；
+2. 删除或停用 `config/prompt_enhancement.json`（停用真实调用）；
 3. 任务中的 `original_prompt`/`prompt_source` 为可选字段，旧代码读取时忽略，无需迁移；
 4. 已生成的强化报告属于测试产物，可单独清理，不影响业务数据。

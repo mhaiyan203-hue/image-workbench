@@ -1,5 +1,13 @@
 # 第四阶段本地 Web 接口约定
 
+图片兼容扩展（2026-10-22）：新增经原身份/Workspace 入口访问的 `GET /api/image-styles`，返回
+`{skill_id,version,default_enabled:true,styles:[{id,name,category,summary,tags,prompt,example_prompt,aspect_ratio,preview_url,preview_alt,sources}]}`。
+任务创建 multipart 增加可选 `style_id`；不传或空值均表示遵循原始需求，但仍使用默认图片 Skill。
+未知风格返回 400，同一保存请求改变风格返回 409。旧请求字段、路径及提交/计费边界不变。
+TaskDetail 增加 `image_prompt`（旧记录为 null），包含 `skill_id,skill_version,skill_sha256,style_id,style_name,source_prompt,compiled_prompt,spec`；
+任务列表不携带该较大的快照。预览是随网站发布的公共示例，选择风格不会上传或绑定预览图。
+完整调用与兼容策略见 [图片默认 Skill](image_generation_skill.md)。
+
 后续兼容扩展（2026-10-20）：脚本页面和 `/api/scripts/*` 路径、请求字段与已有响应字段保持兼容。
 `GET /api/scripts/config` 增加 `generation_plugin`（描述及 `enabled`），不替代模型目录的实际可用性。
 脚本插件停用后，新 quote/submit 返回 409；相同已受理请求的 submit 仍返回原任务，
@@ -8,7 +16,12 @@ detail/list/download/recover 和手动版本入口继续按原权限与恢复合
 
 仅 localhost；同源请求。所有写操作附 `X-Workbench-CSRF`，值来自 `GET /api/config`。所有ID为32位小写十六进制；网页不传服务器路径。JSON错误为 `{detail: "可读中文摘要"}`，不返回内部异常或日志。
 
-- `GET /api/config` → `{csrf_token, backend: "codex"|"local", worker_running, max_input_images:8, max_image_bytes:20971520, max_upload_bytes:41943040, ratios:["auto","1:1","3:2","2:3"]}`。local显示“演练模式 · 不消耗生图额度”；codex显示“本地 Codex · 手动启动”。比例由提示词约束，不保证精确像素尺寸。
+- `GET /api/config` → `{csrf_token, backend: "codex"|"local"|"image-api", worker_running, max_input_images:8, max_image_bytes:20971520, max_upload_bytes:41943040, ratios:["auto","1:1","3:2","2:3"]}`。local显示演练环境；codex显示本地或远程 Codex；image-api显示“图片 API · 生成与编辑”。默认仍是 codex。Codex 比例由提示词约束；图片 API 将显式比例传为对应 size，实际产物仍做解码校验。配置接口不返回供应方地址、API Key 或私密配置路径。
+
+2026-10-23：Worker 的 `POST /api/worker/claim` 请求 `backend` 在 `codex`、`local` 基础上增加
+`image-api`。原请求与默认值兼容，仍必须与服务器当前后端匹配；接口快照仅更新该字段允许值。
+远端领取清单新增可选 `aspect_ratio`（`auto`、`1:1`、`3:2`、`2:3`），来自保存的任务选项；
+新 Worker 读取旧清单时缺省为 `auto`，旧 Worker 可忽略该新增字段。已编译的图片 Skill 提示词仍按原协议传递。
 - `GET /api/projects` → `{projects:[{project_id,name,created_at}]}`。
 - `POST /api/projects`，JSON `{request_id,name}` → Project。request_id在同一次保存意图内固定，重发不创建重复项目。
 - `GET /api/projects/{pid}/tasks` → `{tasks:[{task_id,project_id,operation,prompt,base_artifact_id,created_at,status,status_label,input_count,output_count,preview_artifact:ArtifactDTO|null}]}`，新到旧。摘要包含首张输出预览，不必逐项打开详情才能看到缩略图。
@@ -22,6 +35,10 @@ detail/list/download/recover 和手动版本入口继续按原权限与恢复合
 TaskDetail在任务摘要基础上增加：`inputs:[ArtifactDTO]`, `outputs:[ArtifactDTO]`, `base_image:ArtifactDTO|null`, `aspect_ratio`, `original_prompt:string|null`（强化前原文；未使用强化时为null）, `prompt_source:{kind,enhancement_id,skill_id,skill_version,mode,task_type}|null`, `current_job:{job_id,status,created_at,started_at,finished_at}|null`, `last_execution_id`, `can_generate`, `can_retry`, `can_restore`, `error_summary`, `failure_type`, `elapsed_seconds`, `timings:{prepare_seconds,codex_seconds,validate_seconds,register_seconds,total_seconds}|null`, `executions:[{execution_id,status,created_at,failure_type,total_seconds}]`。API不返回原始stderr、命令、凭据或磁盘路径。
 
 ArtifactDTO：`artifact_id,project_id,task_id,kind,role,format,width,height,size_bytes,created_at,source_artifact_id,url,download_url,review_status:"pending"|"approved",reviewed_at`。
+
+2026-10-23：任务列表摘要也返回派生字段 `can_generate`，用于选择可批量提交的草稿；详情原字段不变。
+“直接生成”显式串联保存和 run，“批量生成”按所选草稿逐项调用已有 run，不新增另一套执行或积分接口。
+新增 `image_api_content_rejected` 失败类型，表示供应方明确返回 `content_policy_violation`；页面只显示固定说明。
 
 界面status：`draft`待开始、`queued`等待执行、`generating`生成中、`checking`检查产物、`awaiting_review`等待审核、`approved`已通过、`failed`执行失败、`uncertain`状态待确认。
 
@@ -60,6 +77,16 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
 图片详情、脚本任务和视频 current_job 额外包含相同的 recovery 投影。
 
 
+## 在线视频执行器
+
+创建视频分镜可选 `backend`，默认为兼容旧客户端的 `h3`；`online-2.0` 当前只接受 `T2V`、无参考图、720p、5/10/15 秒。网站积分沿用 720p 每秒报价。供应方输出按所选画幅缩放至网站交付尺寸。视频执行器领取可选 `backend`，缺省 `h3`；不同 backend 分别领取和占用队列。视频配置的 `workers_online` 分别显示执行器心跳，原 `worker_online` 保留为 H3 状态。
+
+在线视频新增可选领取阶段 `stage=planning`，只由提示词执行器领取新任务；完成后调用 `/api/worker/video/jobs/{job_id}/plan`，服务端校验并保存计划，将同一任务交回 2.0 生成队列。重复提交相同计划幂等。缺省阶段为 `generation`，保留旧客户端语义。`local_h3_available` 为 false 时不接受新的本机 H3 分镜提交，旧记录和已受理任务仍可读取、恢复。
+
+## Qwen 测试功能下线（2026-10-28）
+
+按用户要求移除 Qwen 页面、导航、静态资源、业务服务和本机执行器。`/qwen-test`、`/api/qwen/*` 和 `/api/worker/qwen/*` 不再注册；其旧接口从契约快照中明确删除。已保存的图片及历史任务文件不迁移、不删除，其他功能的权限、积分和产物接口保持原约定。
+
 ## 提示词强化（2026-10-31，增量接口）
 
 - `POST /api/prompt-enhancements`，JSON：
@@ -67,6 +94,19 @@ uncertain 不提供重新生成动作；视频的原执行对账/最终回传由
   → `{schema_version, enhancement_id, request_id, status:"enhanced"|"fallback", mode, task_type, skill:{skill_id,name,version}, style?, original_prompt, enhanced_prompt, intent_summary, preserved_user_requirements, added_details, negative_constraints, edit_plan?, references, warnings, fallback:{code,message}|null, usage, source:{kind,enhancement_id,skill_id,skill_version,mode,task_type}}`。
 - 边界：`prompt` 非空且不超过4000字符；参考图不超过8张且索引不重复；编辑任务必须带 `edit_target` 或 `base` 参考图，`edit` 只允许编辑任务，`aspect_ratio` 只继承底图；多张参考图中 `role:"other"` 必须写明用途。违反返回400，且不调用模型。
 - 幂等：同一账号+Workspace内相同 `request_id` 返回缓存结果；同一ID的内容指纹不同返回409。缓存只保存本次强化结果，不跨Workspace复用。
-- 模型：默认 `provider:"mock"` 离线演练；配置真实 deepseek-flash 后每次请求最多调用一次。超时、空响应、格式或结构错误、编辑计划缺失、模型不可用、预算超限时返回 `status:"fallback"`、`enhanced_prompt` 等于原文，并以 `fallback.code` 标注 timeout/empty_response/invalid_json/invalid_schema/invalid_edit_plan/model_unavailable/model_error/budget_exceeded。
+- 模型：公网使用 `provider:"deepseek_flash"`、官方 `deepseek-flash` 非思考模式并复用服务端文本 API 凭据；每次请求最多调用一次，离线演练显式使用 Mock。超时、空响应、格式或结构错误、编辑计划缺失、模型不可用、预算超限时返回 `status:"fallback"`、`enhanced_prompt` 等于原文，并以 `fallback.code` 标注 timeout/empty_response/invalid_json/invalid_schema/invalid_edit_plan/model_unavailable/model_error/budget_exceeded。
 - 计费与执行：本接口不修改任务状态、不写文件、不调用 ImageBackend、不冻结或扣减积分；图片生成价格不变。真实调用按账号+Workspace限制每小时/每天次数；`usage` 返回调用次数、Token（若有）以及仅在配置单价时计算的 `estimated_cost`/`currency`。
 - 溯源：用户点击“使用强化版”后，任务保存可附带 `original_prompt` 与 `prompt_source`（取自响应的 `source`）。服务端只接受固定字段，来源不合法返回400；未使用强化的任务两者均为null。
+
+## 内测反馈补充（2026-11-10）
+
+以下为兼容新增，不替换既有视频提交、Worker 完成或积分接口。写请求沿用登录、Workspace 与 CSRF 边界。
+
+| 方法与路径 | 请求 / 响应 | 约束 |
+| --- | --- | --- |
+| `POST /api/video/projects/{pid}/shots/{sid}/cancel` | `{job_id}` → 原视频 job 投影 | 仅所属空间；仅 queued 且无 claim；与领取共锁。重复取消幂等。已领取返回 409。内部沿用 failed 终态并退款，不新增账本状态 |
+| `GET /api/video/uncertain-jobs` | `{jobs:[...]}` | 仅有效管理员，全站未知视频；只读快照，附 backend、stage、worker_id、attempt_id、prompt_id、has_output 供核对 |
+| `POST /api/video/jobs/{job_id}/confirm-stopped` | `{confirmed:true,evidence:"核对依据"}` → job 投影 | 仅管理员，仅 uncertain 且无已上传输出或未归档的输出文件；保留操作者及依据，按既有失败结算释放冻结；重复确认幂等；不终止执行器、不重放生成 |
+| `GET /api/video/projects/{pid}/assets/{asset_id}/thumbnail` | JPEG，长边不超过 320px | 原资产身份/Workspace 校验，private 缓存；不改变原图与执行器输入 |
+
+网页提交前显示模式、参考图数、时长、尺寸与积分。T2V 有已选参考图时阻止保存，要求用户明确切换模式或取消选择。付费执行仍只有显式确认才提交原 `/run` 接口。

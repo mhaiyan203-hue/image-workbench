@@ -21,18 +21,32 @@ class MetadataError(ValueError):
     """Invalid metadata must surface rather than being silently skipped."""
 
 
+def _resolved_path(path):
+    resolved = path.resolve()
+    # During an atomic replace, Windows realpath may retain its extended prefix
+    # when the second handle lookup encounters a sharing violation. Compare the
+    # same resolved location consistently without relaxing the scope boundary.
+    if os.name == "nt":
+        value = str(resolved)
+        if value.startswith("\\\\?\\UNC\\"):
+            return Path("\\\\" + value[8:])
+        if value.startswith("\\\\?\\") and value[4:5].isalpha() and value[5:7] == ":\\":
+            return Path(value[4:])
+    return resolved
+
+
 class ManagedFiles:
     def __init__(self, root, *, anchor=None):
         self.root = Path(root).absolute()
         self.anchor = Path(anchor).absolute() if anchor is not None else self.root
         # Windows TEMP may contain an 8.3 alias. Keep the original spelling for
         # reparse-point checks and pin its real boundary before delegating scopes.
-        self._resolved_root = self.root.resolve()
+        self._resolved_root = _resolved_path(self.root)
         self.path()
         # Return one canonical spelling so independently constructed ports and
         # StorageManager can exchange paths when TEMP itself uses a short alias.
         self.root = self._resolved_root
-        self.anchor = self.anchor.resolve()
+        self.anchor = _resolved_path(self.anchor)
 
     def scope(self, *parts):
         """Delegate access to a subtree without broadening the original boundary."""
@@ -58,7 +72,7 @@ class ManagedFiles:
                 & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
             ):
                 raise ValueError(f"受管理路径不允许符号链接或重解析点: {current}")
-        if not candidate.resolve().is_relative_to(self._resolved_root):
+        if not _resolved_path(candidate).is_relative_to(self._resolved_root):
             raise ValueError("受管理路径解析后超出授权目录")
         return candidate
 

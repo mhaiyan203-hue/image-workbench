@@ -35,3 +35,5 @@
   .pipeline-current{right:6px;top:10px;font-size:9px}.pipeline-steps small{font-size:10px}
 }
 @media(prefers-reduced-motion:reduce){.pipeline-steps>a{transition:none}}
+
+.pipeline-steps{position:sticky;top:0;z-index:5}.pipeline-steps>a{flex:1}

@@ -14,13 +14,14 @@ from .video_store import VideoStore
 from .video_web import install_video
 from .video_pipeline import install_pipeline
 from .pipeline_service import PipelineService
-from .qwen_lab import QwenLabStore
-from .qwen_web import install_qwen
 from .storyboard_service import StoryboardService
 from .storyboard_web import install_storyboards
 from .plugin_api import PluginRegistry
 from .script_plugin import PLUGIN_ID, ScriptGenerationPlugin
 from .script_workflow import ScriptStoryboardWorkflow
+from .deepseek_text import DeepSeekTextAdapter
+from .script_api_models import DeepSeekModelRegistry
+from .storyboard_planner import StoryboardPlanner
 from .prompt_enhancement import PromptEnhancementService
 from .http_api.prompt_enhancements import install_routes as install_prompt_enhancements
 
@@ -33,9 +34,11 @@ def create_app(storage: StorageManager | None = None, *, backend="codex", remote
         raise ValueError(f"Unknown disabled plugins: {sorted(disabled - {PLUGIN_ID})}")
     application = AccountApplication(storage or StorageManager(), backend=backend,
                                      remote_access=remote_access, registration_policy=registration_policy)
-    application.video_store = VideoStore(application.storage, application.identity)
-    application.script_service = ScriptService(application.storage, application.identity)
-    application.qwen_store = QwenLabStore(application.storage, application.identity)
+    application.video_store = VideoStore(application.storage, application.identity, enabled_backends=("online-2.0",))
+    registry = DeepSeekModelRegistry()
+    text_adapter = DeepSeekTextAdapter()
+    application.script_service = ScriptService(application.storage, application.identity,
+                                               registry=registry, adapter=text_adapter)
     # Prompt enhancement is stateless: it never receives storage, identity or
     # the image backend. HTTP resolves the current service on every request so
     # tests can replace it without rebuilding routes.
@@ -64,16 +67,17 @@ def create_app(storage: StorageManager | None = None, *, backend="codex", remote
         from .script_remote import ScriptRemoteQueue, RemoteScriptRegistry
         from .http_api.script_workers import install_script_worker
         application.script_queue = ScriptRemoteQueue(application.script_service)
-        registry = RemoteScriptRegistry(application.script_queue)
+        registry = RemoteScriptRegistry(application.script_queue, config_root=registry.root)
         application.script_service.registry = registry
         application.script_service.router.registry = registry
         install_script_worker(application.auth, application.script_queue, after_script=lambda task: workflow().after_script(task))
     application.storyboard_service = StoryboardService(application.storage, application.identity,
                                                        lambda aid, wid, vid: scripts().storyboard_source(aid, wid, vid),
-                                                       application.video_store, registry=scripts().registry)
+                                                       application.video_store, registry=DeepSeekModelRegistry(),
+                                                       planner=StoryboardPlanner(adapter=text_adapter),
+                                                       pricing_path=registry.root / "storyboard_pricing.json")
     application.script_workflow = ScriptStoryboardWorkflow(scripts, lambda: application.storyboard_service)
     install_storyboards(application.auth, application.storyboard_service, resume_pending=application.script_workflow.resume_pending)
     install_pipeline(application.auth, application.pipeline_service, application.video_store)
-    install_qwen(application.auth, application.qwen_store)
     install_prompt_enhancements(application.auth, lambda: application.prompt_enhancement_service)
     return application

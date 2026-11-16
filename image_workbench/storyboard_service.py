@@ -12,7 +12,7 @@ from .storage import _now, _validate_id
 from .storyboard_models import (EDIT_FIELDS, RATIOS, duration_capabilities, duration_conflict,
                                 generation_plan, ids, integer, normalize_plan, normalize_shot,
                                 shot_fingerprint, text)
-from .storyboard_planner import SKILL, StoryboardPlanner, build_prompt
+from .storyboard_planner import StoryboardPlanner, build_prompt, load_skill
 from .domain_errors import ConflictError
 from .workspace_scope import WorkspaceProjects
 
@@ -76,11 +76,11 @@ class StoryboardService:
             raise ValueError("分镜参数含未知字段")
         value = {"mode": "mock", "selection_mode": "recommended", "target_duration_ms": 60000,
                  "aspect_ratio": "16:9", "visual_style": "", "characters": "", "scenes": "", "requirements": "",
-                 "reference_artifact_ids": [], "video_model_id": "h3", **deepcopy(raw)}
-        if value["mode"] not in {"mock", "codex"} or value["selection_mode"] not in {"recommended", "manual"}:
+                 "reference_artifact_ids": [], "video_model_id": self.video.config()["default_video_model_id"], **deepcopy(raw)}
+        if value["mode"] not in {"mock", "codex", "api"} or value["selection_mode"] not in {"recommended", "manual"}:
             raise ValueError("分镜模式或模型选择方式无效")
         integer(value["target_duration_ms"], "目标时长", 1000)
-        if value["aspect_ratio"] not in RATIOS or value["video_model_id"] != "h3":
+        if value["aspect_ratio"] not in RATIOS or value["video_model_id"] not in {"h3", "online-2.0"}:
             raise ValueError("分镜比例或视频模型无效")
         for field in ("visual_style", "characters", "scenes", "requirements"):
             value[field] = text(value[field], field)
@@ -101,7 +101,7 @@ class StoryboardService:
             if project.get("pipeline", {}).get("subproject_id") != subproject_id:
                 raise ValueError("视频项目与脚本子项目不一致，请先初始化项目关联")
 
-    def quote_options(self, aid, wid, raw, *, source=None, request=None):
+    def quote_options(self, aid, wid, raw, *, source=None, request=None, _skill=None):
         options = self.normalize_options(raw)
         cfg, pricing = self.config(aid, wid), self._pricing()
         if source:
@@ -117,6 +117,9 @@ class StoryboardService:
         spec = DemandRouter(self.registry).classify(demand)
         choice = {"model_id": None, "thinking_level": None, "display_name": "未找到可用模型", "price": None}
         blocked = None
+        video_model = next(m for m in cfg["video_models"] if m["model_id"] == options["video_model_id"])
+        if not video_model.get("available", True):
+            raise ValueError("该视频模型已停止新任务，请选择 SD2.0")
         if options["mode"] == "mock":
             choice = {"model_id": "mock-storyboard", "thinking_level": "rules", "display_name": "Mock 分镜（离线规则）", "price": 0}
             blocked = None if cfg["mock_enabled"] else "Mock 模式未启用"
@@ -135,6 +138,7 @@ class StoryboardService:
                 preferred = ([("gpt-6-astra", "high"), ("gpt-6.1-sol", "high"), ("gpt-6-luna", "high")]
                              if spec["complexity"] == "complex" else
                              [("gpt-6.1-sol", "medium"), ("gpt-6-luna", "medium"), ("gpt-6-luna", "high"), ("gpt-6-astra", "medium")])
+                preferred = [("deepseek-flash", "high")] + preferred
                 candidates = [(m, l) for mid, effort in preferred for m in models if m["model_id"] == mid and m["available"]
                               for l in m["thinking_levels"] if l["id"] == effort]
                 candidate = next(((m, l) for m, l in candidates if l["price"] is not None), candidates[0] if candidates else None)
@@ -150,10 +154,11 @@ class StoryboardService:
             elif choice["price"] == 0 and not pricing.get("free_test_enabled"):
                 blocked = "真实免费测试尚未启用"
         remaining = self.identity.wallet(aid)["remaining_credit"]
+        skill = _skill if _skill is not None else load_skill()
         shortfall = max(0, (choice["price"] or 0) - remaining) if remaining is not None else 0
         signature_body = {"options": options, "choice": choice, "source_version": source["version_id"] if source else None,
                           "source_hash": source["sha256"] if source else signature(request or {}),
-                          "skill_sha256": hashlib.sha256(SKILL.read_bytes()).hexdigest(), "pricing": pricing,
+                          "skill_sha256": skill["sha256"], "pricing": pricing,
                           "video_models": cfg["video_models"]}
         return {**choice, "reason": reason, "demand_spec": spec, "shortfall": shortfall, "remaining_credit": remaining,
                 "pricing_status": "priced" if choice["price"] is not None else "unpriced",
@@ -241,13 +246,14 @@ class StoryboardService:
                 return self._public_task(old)
             if body.get("confirmed") is not True:
                 raise ValueError("请确认分镜模型、思考强度和预计积分")
-            quote = self.quote_options(aid, wid, options, source=source)
+            skill = load_skill()
+            quote = self.quote_options(aid, wid, options, source=source, _skill=skill)
             if dependency:
                 # Preserve the exact earlier approved model; do not silently re-route after TXT creation.
                 approved = dependency["storyboard_quote"]
-                if options["mode"] == "codex":
+                if options["mode"] != "mock":
                     options.update(selection_mode="manual", model_id=approved["model_id"], thinking_level=approved["thinking_level"])
-                    quote = self.quote_options(aid, wid, options, source=source)
+                    quote = self.quote_options(aid, wid, options, source=source, _skill=skill)
                 if quote["price"] != approved["price"] or quote["model_id"] != approved["model_id"] or quote["thinking_level"] != approved["thinking_level"]:
                     raise ConflictError("分镜价格或模型已变化，脚本已保留，请重新确认分镜报价")
             elif body.get("quote_signature") != quote["quote_signature"]:
@@ -275,9 +281,10 @@ class StoryboardService:
                    "model_id": quote["model_id"], "thinking_level": quote["thinking_level"],
                    "price": quote["price"], "status": "queued", "review_status": "planning",
                    "created_at": _now(), "finished_at": None, "error": None, "replan": replan,
-                   "job_id": uuid4().hex if options["mode"] == "codex" else None,
+                   "job_id": uuid4().hex if options["mode"] != "mock" else None,
                    "credit_status": "not_applicable" if options["mode"] == "mock" else "credit_frozen"}
-            job["prompt"] = build_prompt(source, internal_options, capability, replan.get("selected_shots") if replan else None)
+            job["skill_reference"] = {k: v for k, v in skill.items() if k != "instructions"}
+            job["prompt"] = build_prompt(source, internal_options, capability, replan.get("selected_shots") if replan else None, skill=skill)
             if job["job_id"]:
                 job = self.identity.reserve(job, {"account_id": aid, "workspace_id": wid}, quote["price"])
             self._write_task(job)
@@ -826,7 +833,8 @@ class StoryboardService:
                        "draft_test_confirmed": body.get("allow_draft_test") is True}
             return self.video.create_shot(aid, wid, pid, request_id=rid, name=shot["title"], prompt=shot["video_prompt"],
                 mode=mode, duration=shot["generation_duration_ms"] // 1000, aspect_ratio=RATIOS[shot["aspect_ratio"]],
-                reference_ids=refs, resolution=body.get("resolution", "720p"), storyboard_binding=binding)
+                reference_ids=refs, resolution=body.get("resolution", "720p"), storyboard_binding=binding,
+                backend=shot["video_model_id"])
 
     def _videos(self, aid, wid, envelope, record):
         shots = {s["shot_id"]: s for s in record["shots"]}

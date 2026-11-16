@@ -38,6 +38,7 @@
         "video_models",
         "managed_files",
         "task_recovery",
+        "deepseek_text",
         "deepseek_flash"
       ],
       "may_import": [
@@ -73,7 +74,9 @@
     "image_backend": {
       "modules": [
         "image_backend",
-        "codex_backend"
+        "codex_backend",
+        "image_api_backend",
+        "image_prompting"
       ],
       "may_import": [
         "foundation",
@@ -137,7 +140,8 @@
         "script_remote",
         "script_remote_worker",
         "script_resources",
-        "script_engine"
+        "script_engine",
+        "script_api_models"
       ],
       "may_import": [
         "foundation",
@@ -151,7 +155,11 @@
     "video": {
       "modules": [
         "video_store",
-        "h3_worker"
+        "h3_worker",
+        "online_video_worker",
+        "online_video_planner",
+        "h3_skill",
+        "seedance_skill"
       ],
       "may_import": [
         "foundation",
@@ -159,17 +167,6 @@
         "identity",
         "video",
         "projects"
-      ]
-    },
-    "qwen": {
-      "modules": [
-        "qwen_lab",
-        "qwen_worker"
-      ],
-      "may_import": [
-        "foundation",
-        "storage",
-        "qwen"
       ]
     },
     "workflows": {
@@ -218,7 +215,6 @@
         "http_api.*",
         "script_web",
         "video_web",
-        "qwen_web",
         "admin_web",
         "video_pipeline",
         "script_resource_web",
@@ -235,7 +231,6 @@
         "images",
         "scripts",
         "video",
-        "qwen",
         "pipeline",
         "operations",
         "prompt_enhancement",
@@ -309,7 +304,8 @@
       "WorkbenchApi": "web_static/workbench-api.js",
       "WorkbenchPromptEnhancement": "web_static/workbench-prompt-enhancement.js",
       "WorkbenchPreview": "web_static/workbench-preview.js",
-      "WorkbenchAccounts": "web_static/workbench-accounts.js"
+      "WorkbenchAccounts": "web_static/workbench-accounts.js",
+      "WorkbenchStyles": "web_static/workbench-styles.js"
     },
     "state_ports": {
       "IWVideo": {

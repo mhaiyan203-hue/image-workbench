@@ -39,8 +39,9 @@ from .media_validation import inspect_mp4
 
 
 class VideoStore:
-    def __init__(self, storage, identity=None):
+    def __init__(self, storage, identity=None, *, enabled_backends=("h3", "online-2.0")):
         self.storage = storage
+        self.enabled_backends = tuple(enabled_backends)
         self.identity = identity or IdentityStore(storage)
         self.files = storage.files.scope(".video")
         self.root = self.files.root
@@ -85,19 +86,28 @@ class VideoStore:
         legacy_rate = saved.get("legacy_credits_per_second", saved.get("credits_per_second"))
         if legacy_rate is not None and (type(legacy_rate) is not int or not 1 <= legacy_rate <= 10000):
             raise ValueError("视频积分配置无效")
-        online = False
+        workers = {"h3": False, "online-2.0": False, "online-planner": False}
         for path in self._path("workers").glob("*.json"):
             info = self._read(path)
-            online |= 0 <= time.time() - info.get("time", 0) <= 120
+            backend = info.get("backend", "h3")
+            if backend in workers:
+                workers[backend] |= 0 <= time.time() - info.get("time", 0) <= 120
         return {"rates": dict(rates), "configured": True, "legacy_credits_per_second": legacy_rate,
                 "enabled_resolutions": self._enabled_resolutions(),
-                "worker_online": online, "modes": ["T2V", "I2V", "R2V"],
+                "local_h3_available": self._h3_enabled(),
+                "default_video_model_id": self.enabled_backends[0],
+                "worker_online": workers["h3"], "workers_online": workers, "modes": ["T2V", "I2V", "R2V"],
                 "durations": {"min": 4, "max": 15},
-                "video_models": [{"model_id": "h3", "display_name": "H3",
+                "video_models": [{"model_id": "h3", "display_name": "H3", "available": self._h3_enabled(),
                                   "supported_durations_ms": list(range(4000, 15001, 1000)),
                                   "min_duration_ms": 4000, "max_duration_ms": 15000, "duration_step_ms": 1000,
                                   "supported_durations": list(range(4, 16)), "min_duration": 4,
-                                  "max_duration": 15, "duration_step": 1}],
+                                  "max_duration": 15, "duration_step": 1},
+                                 {"model_id": "online-2.0", "display_name": "SD2.0 · Seedance 2.0", "available": True,
+                                  "supported_durations_ms": [5000, 10000, 15000], "min_duration_ms": 5000,
+                                  "max_duration_ms": 15000, "duration_step_ms": 5000,
+                                  "supported_durations": [5, 10, 15], "min_duration": 5,
+                                  "max_duration": 15, "duration_step": 5, "modes": ["T2V"]}],
                 "ratios": {key: {"width": value[0], "height": value[1]} for key, value in RATIOS.items()},
                 "resolutions": {resolution: {ratio: {"width": size[0], "height": size[1]} for ratio, size in ratios.items()}
                                 for resolution, ratios in RESOLUTIONS.items()},
@@ -107,6 +117,9 @@ class VideoStore:
     @staticmethod
     def _enabled_resolutions():
         return ["720p", "1080p"] if os.environ.get("IMAGE_WORKBENCH_ENABLE_1080P") == "1" else ["720p"]
+
+    def _h3_enabled(self):
+        return "h3" in self.enabled_backends and os.environ.get("IMAGE_WORKBENCH_DISABLE_H3_SUBMISSIONS") != "1"
 
     @staticmethod
     def _validate_rates(rates):
@@ -136,7 +149,19 @@ class VideoStore:
         value = self._read(self._project_path(pid))
         if (value.get("account_id"), value.get("workspace_id"), value.get("project_id")) != (account_id, workspace_id, pid):
             raise FileNotFoundError("视频项目不存在")
+        if not self._linked_project_available(value, account_id, workspace_id):
+            raise FileNotFoundError("关联项目已删除或不在当前工作空间")
         return value
+
+    def _linked_project_available(self, project, account_id, workspace_id):
+        link = project.get("pipeline")
+        if not link:
+            return True
+        try:
+            owner = self.identity.ownership(link["main_project_id"])
+        except FileNotFoundError:
+            return False
+        return not owner["deleted"] and (owner["account_id"], owner["workspace_id"]) == (account_id, workspace_id)
 
     def create_project(self, account_id, workspace_id, request_id, name, script=""):
         self.identity.require_workspace(account_id, workspace_id)
@@ -194,9 +219,9 @@ class VideoStore:
             if not directory.is_dir():
                 continue
             value = self._optional(directory / "project.json")
-            if value and (value.get("account_id"), value.get("workspace_id")) == (account_id, workspace_id):
-                result.append({**{key: value[key] for key in ("project_id", "name", "script", "created_at")},
-                               "pipeline": dict(value.get("pipeline") or {})})
+            if (value and (value.get("account_id"), value.get("workspace_id")) == (account_id, workspace_id)
+                    and self._linked_project_available(value, account_id, workspace_id)):
+                result.append({**{key: value[key] for key in ("project_id", "name", "script", "created_at")}, "pipeline": dict(value.get("pipeline") or {})})
         return sorted(result, key=lambda p: (p["created_at"], p["project_id"]), reverse=True)
 
     def _asset(self, pid, aid):
@@ -399,7 +424,7 @@ class VideoStore:
         return value
 
     def create_shot(self, account_id, workspace_id, pid, *, request_id, name, prompt, mode, duration, aspect_ratio, reference_ids,
-                    resolution="720p", storyboard_binding=None):
+                    resolution="720p", storyboard_binding=None, backend="h3"):
         _validate_id(request_id)
         _string(name, "分镜名称", 120)
         _string(prompt, "分镜提示词", 12000)
@@ -411,6 +436,10 @@ class VideoStore:
             raise ConflictError(DISABLED_RESOLUTION_REASON)
         if type(duration) is not int or not 4 <= duration <= 15:
             raise ValueError("视频时长需为4–15秒的整数")
+        if backend not in {"h3", "online-2.0"}:
+            raise ValueError("视频执行器无效")
+        if backend == "online-2.0" and (mode != "T2V" or reference_ids or duration not in {5, 10, 15} or resolution != "720p"):
+            raise ValueError("在线视频 2.0 当前只支持 720p 文生视频，时长为 5、10 或 15 秒")
         if not isinstance(reference_ids, list) or len(reference_ids) > 9 or len(set(reference_ids)) != len(reference_ids):
             raise ValueError("参考图列表无效")
         for aid in reference_ids:
@@ -421,6 +450,8 @@ class VideoStore:
         payload = {"project_id": pid, "shot_id": request_id, "name": name, "prompt": prompt, "mode": mode,
                    "duration": duration, "aspect_ratio": aspect_ratio, "reference_ids": reference_ids,
                    "resolution": resolution, "width": width, "height": height}
+        if backend != "h3":
+            payload["backend"] = backend
         if storyboard_binding is not None:
             # Only StoryboardService calls this bridge; the general HTTP Shot body rejects these fields.
             for field in ("storyboard_id", "storyboard_shot_id", "storyboard_artifact_id", "storage_project_id", "subproject_id"):
@@ -449,9 +480,11 @@ class VideoStore:
                     old = {**old, "main_project_id": payload.get("main_project_id"),
                            "subproject_id": payload["subproject_id"]}
                     self._write(path, old)
-                if any(old.get(key) != value for key, value in payload.items()):
+                if old.get("backend", "h3") != backend or any(old.get(key) != value for key, value in payload.items()):
                     raise ConflictError("分镜请求标识已用于不同内容")
             else:
+                if backend == "h3" and not self._h3_enabled():
+                    raise ConflictError("H3 已停止新任务，请选择 SD2.0")
                 self._write(path, {**payload, "created_at": _now()})
         return self.shot(account_id, workspace_id, pid, request_id)
 
@@ -493,7 +526,7 @@ class VideoStore:
         keys = ("job_id", "project_id", "task_id", "status", "credit_status", "credit_cost", "credits_per_second",
                 "resolution", "duration", "created_at", "started_at", "finished_at", "updated_at", "error",
                 "storyboard_id", "storyboard_version", "storyboard_shot_id", "main_project_id", "subproject_id",
-                "output_task_id", "output_artifact_id", "video_version")
+                "output_task_id", "output_artifact_id", "video_version", "cancelled_before_claim")
         return {**{key: job[key] for key in keys if key in job}, "recovery": VideoStore._recovery(job, job["task_id"])}
 
     @staticmethod
@@ -546,6 +579,8 @@ class VideoStore:
         rate = config["rates"][shot["resolution"]] if supported else None
         blocked_reason = REBUILD_REASON if not supported else (
             DISABLED_RESOLUTION_REASON if shot["resolution"] not in config["enabled_resolutions"] else None)
+        if shot.get("backend", "h3") == "h3" and not self._h3_enabled():
+            blocked_reason = "旧版本机 H3 分镜不能再提交，请按原内容新建在线视频 2.0 分镜"
         base = f"/api/video/projects/{shot['project_id']}/shots/{shot['shot_id']}/output?workspace_id={wid}"
         completed = bool(job and job["status"] == "completed")
         return {**shot, "status": job["status"] if job else "draft", "current_job": self.public_job(job),
@@ -592,6 +627,8 @@ class VideoStore:
             job = self._current(pid, sid)
             if job and job["status"] in ACTIVE | {"completed"}:
                 return self.public_job(job)
+            if shot.get("backend", "h3") == "h3" and not self._h3_enabled():
+                raise ConflictError("旧版本机 H3 分镜不能再提交，请按原内容新建在线视频 2.0 分镜")
             if shot["resolution"] not in self._enabled_resolutions():
                 raise ConflictError(DISABLED_RESOLUTION_REASON)
             if job and retry_of != job["job_id"]:
@@ -603,11 +640,13 @@ class VideoStore:
             cost = shot["duration"] * rate
             if expected_credit != cost:
                 raise ConflictError("视频单价已更新，请刷新报价后重新提交")
-            job = {"schema_version": 1, "kind": "video", "backend": "h3", "job_id": uuid4().hex,
+            job = {"schema_version": 1, "kind": "video", "backend": shot.get("backend", "h3"), "job_id": uuid4().hex,
                    "project_id": pid, "task_id": sid, "request_id": request_id, "action": "generate", "confirmed": True,
                    "duration": shot["duration"], "resolution": shot["resolution"], "credits_per_second": rate,
                    "status": "queued", "created_at": _now(),
                    "started_at": None, "finished_at": None, "error": None, "attempt_id": None, "prompt_id": None}
+            if job["backend"] == "online-2.0":
+                job["skill_required"] = True
             if shot.get("storyboard_id"):
                 job.update({key: shot[key] for key in ("storyboard_id", "storyboard_version", "storyboard_shot_id",
                             "storyboard_artifact_id", "shot_fingerprint", "storage_project_id", "subproject_id")})
@@ -624,34 +663,116 @@ class VideoStore:
             self._save_job(job)
             return self.public_job(job)
 
-    def _beat(self, worker_id):
-        self._write(self._path("workers", _validate_id(worker_id) + ".json"), {"worker_id": worker_id, "time": time.time()})
+    def _beat(self, worker_id, backend="h3"):
+        self._write(self._path("workers", _validate_id(worker_id) + ".json"), {"worker_id": worker_id, "backend": backend, "time": time.time()})
+
+    def cancel_queued(self, account_id, workspace_id, pid, sid, job_id):
+        """Claim and cancellation share the same lock; never cancel claimed work."""
+        with self.lock():
+            self._project(account_id, workspace_id, pid)
+            job = self._read(self._job_path(job_id))
+            if (job["project_id"], job["task_id"]) != (pid, sid):
+                raise FileNotFoundError("视频作业不存在")
+            if job.get("cancelled_before_claim"):
+                self._save_job(job)
+                return self.public_job(job)
+            if job["status"] != "queued" or job.get("claim_id"):
+                raise ConflictError("执行器已领取或任务已结束，不能取消；请刷新状态")
+            job.update(status="failed", cancelled_before_claim=True, error="用户取消尚未领取的视频", finished_at=_now())
+            self._save_job(job)
+            return self.public_job(job)
+
+    def confirm_video_stopped(self, account_id, job_id, *, confirmed, evidence):
+        with self.identity.connect() as db:
+            row = db.execute("SELECT is_admin,status FROM accounts WHERE account_id=?", (_validate_id(account_id),)).fetchone()
+        if not row or not row["is_admin"] or row["status"] != "active":
+            raise PermissionError("只有管理员可以核对视频执行结果")
+        if confirmed is not True:
+            raise ValueError("必须明确确认原执行已停止且没有可交付结果")
+        _string(evidence, "核对依据", 2000)
+        with self.lock():
+            job = self._read(self._job_path(job_id))
+            if job.get("stopped_by"):
+                self._save_job(job)
+                return self.public_job(job)
+            if job["status"] != "uncertain" or job.get("output") or self._path("outputs", job_id + ".mp4").is_file():
+                raise ConflictError("仅无已上传结果的未知任务可确认停止；已有输出请先完成归档核对")
+            job.update(status="failed", stopped_by=account_id, stop_evidence=evidence,
+                       error="管理员已核实原执行停止且无结果，冻结积分已释放", finished_at=_now())
+            self._save_job(job)
+            return self.public_job(job)
+
+    def uncertain_jobs(self, account_id):
+        with self.identity.connect() as db:
+            row = db.execute("SELECT is_admin,status FROM accounts WHERE account_id=?", (_validate_id(account_id),)).fetchone()
+        if not row or not row["is_admin"] or row["status"] != "active":
+            raise PermissionError("只有管理员可以查看待核对队列")
+        with self.lock():
+            # Inspect snapshots without settling the outbox or changing any job.
+            jobs = {j["job_id"]: j for j in self.identity.pending_jobs() if j.get("kind") == "video"}
+            for path in self._path("jobs").glob("*.json"):
+                if not path.name.startswith(".tmp-"):
+                    job = self._read(path)
+                    jobs[job["job_id"]] = job
+            return [{**self.public_job(j), "worker_id": j.get("worker_id"), "prompt_id": j.get("prompt_id"),
+                     "attempt_id": j.get("attempt_id"), "backend": j.get("backend", "h3"),
+                     "stage": j.get("stage", "generation"),
+                     "has_output": bool(j.get("output")) or self._path("outputs", j["job_id"] + ".mp4").is_file()}
+                    for j in sorted(jobs.values(), key=lambda j: (j["created_at"], j["job_id"])) if j["status"] == "uncertain"]
 
     def _manifest(self, job):
         project = self._project(job["account_id"], job["workspace_id"], job["project_id"])
         task = self._shot(job["project_id"], job["task_id"])
+        if job.get("stage") != "planning" and job.get("skill_plan"):
+            task = {**task, "prompt": job["skill_plan"]["prompt"]}
         return {**{key: job.get(key) for key in ("job_id", "claim_id", "worker_id", "status", "attempt_id", "prompt_id")},
                 "task": task, "project": {key: project[key] for key in ("project_id", "name", "script")},
                 "assets": [self._asset(job["project_id"], aid) for aid in task["reference_ids"]], "max_output_bytes": MAX_OUTPUT_BYTES}
 
-    def claim(self, worker_id):
+    def claim(self, worker_id, backend="h3", stage="generation"):
         _validate_id(worker_id)
+        if backend not in {"h3", "online-2.0"} or stage not in {"generation", "planning"} or (stage == "planning" and backend != "online-2.0"):
+            raise ValueError("视频执行器无效")
         with self.lock():
-            self._beat(worker_id)
+            self._beat(worker_id, "online-planner" if stage == "planning" else backend)
             jobs = self._jobs()
-            active = [job for job in jobs if job["status"] in {"running", "uncertain"}]
+            jobs = [job for job in jobs if job.get("backend", "h3") == backend]
+            active = [job for job in jobs if job["status"] in {"running", "uncertain"} and job.get("stage", "generation") == stage]
             own = next((job for job in active if job.get("worker_id") == worker_id), None)
             if own:
                 return self._manifest(own)
             if active:  # One H3/GPU execution at a time; uncertain work retains its slot.
                 return None
-            job = next((job for job in jobs if job["status"] == "queued"), None)
+            job = next((job for job in jobs if job["status"] == "queued" and
+                        ((stage == "planning") == bool(job.get("skill_required") and not job.get("skill_plan")))), None)
             if not job:
                 return None
             self.identity.require_reservation(job["job_id"], job["project_id"], job["task_id"])
-            job.update(status="running", worker_id=worker_id, claim_id=uuid4().hex, started_at=_now())
+            job.update(status="running", worker_id=worker_id, claim_id=uuid4().hex, started_at=job.get("started_at") or _now(), stage=stage)
             self._save_job(job)
             return self._manifest(job)
+
+    def complete_plan(self, job_id, worker_id, claim_id, plan):
+        from .seedance_skill import SeedanceSkillPlanner, PROMPT_FORMAT, TASK_FIELDS
+        import json
+        with self.lock():
+            job = self._read(self._job_path(job_id))
+            if (job.get("planner_worker_id"), job.get("planner_claim_id")) == (worker_id, claim_id):
+                if job.get("skill_plan") != plan:
+                    raise ConflictError("已保存的 Skill 结果不能改变")
+                return {"ok": True}
+            job = self._owned(job_id, worker_id, claim_id)
+            if job.get("stage") != "planning" or job.get("status") not in {"running", "uncertain"}:
+                raise ConflictError("任务不在提示词整理阶段")
+            task = self._shot(job["project_id"], job["task_id"])
+            request = {"inputs": {key: task[key] for key in (*TASK_FIELDS, "prompt")}, "prompt_format": PROMPT_FORMAT}
+            validated = SeedanceSkillPlanner.validate(json.dumps(plan, ensure_ascii=False), request)
+            self.identity.require_reservation(job_id, job["project_id"], job["task_id"])
+            job.update(status="queued", stage="generation", skill_plan=validated, planner_worker_id=worker_id,
+                       planner_claim_id=claim_id, worker_id=None, claim_id=None, error=None)
+            self._save_job(job)
+            self._beat(worker_id, "online-planner")
+            return {"ok": True}
 
     def _owned(self, job_id, worker_id, claim_id):
         _validate_id(worker_id)
@@ -666,8 +787,8 @@ class VideoStore:
 
     def heartbeat(self, job_id, worker_id, claim_id):
         with self.lock():
-            self._owned(job_id, worker_id, claim_id)
-            self._beat(worker_id)
+            job = self._owned(job_id, worker_id, claim_id)
+            self._beat(worker_id, "online-planner" if job.get("stage") == "planning" else job.get("backend", "h3"))
             return {"ok": True}
 
     def start(self, job_id, worker_id, claim_id, attempt_id, prompt_id=None):
@@ -692,7 +813,7 @@ class VideoStore:
                 # 恢复运行状态不建立新预约、不改变积分，也不允许换 attempt。
                 job.update(status="running", error=None)
             self._save_job(job)
-            self._beat(worker_id)
+            self._beat(worker_id, "online-planner" if job.get("stage") == "planning" else job.get("backend", "h3"))
             return {"ok": True, "job": self._manifest(job)}
 
     @staticmethod
@@ -762,7 +883,7 @@ class VideoStore:
                     self._register_output(job)
             job.update(status=target, error=error, finished_at=_now() if target in {"completed", "failed"} else None)
             self._save_job(job)
-            self._beat(worker_id)
+            self._beat(worker_id, "online-planner" if job.get("stage") == "planning" else job.get("backend", "h3"))
             return self.public_job(job)
 
     def _register_output(self, job):

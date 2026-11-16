@@ -357,6 +357,26 @@ class PromptEnhancementServiceTests(unittest.TestCase):
 
 
 class DeepSeekFlashAdapterTests(unittest.TestCase):
+    def test_default_flash_reuses_the_deployed_text_api_credentials(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "deepseek.json"
+            config.write_text(json.dumps({"api_key": "test-shared-key"}), encoding="utf-8")
+            with patch.dict("os.environ", {"IMAGE_WORKBENCH_TEXT_API_CONFIG": str(config)}, clear=True):
+                settings = DeepSeekFlashClient().settings()
+            self.assertEqual(settings["endpoint"], "https://api.deepseek.com/chat/completions")
+            self.assertEqual(settings["model"], "deepseek-flash")
+            self.assertEqual(settings["api_key"], "test-shared-key")
+
+    def test_invalid_shared_config_is_unavailable_without_a_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "deepseek.json"
+            config.write_text("invalid json", encoding="utf-8")
+            with patch.dict("os.environ", {"IMAGE_WORKBENCH_TEXT_API_CONFIG": str(config)}, clear=True):
+                with patch("image_workbench.deepseek_flash.urllib.request.urlopen") as send:
+                    with self.assertRaises(FlashConfigError):
+                        DeepSeekFlashClient().complete(system="s", user="u")
+                send.assert_not_called()
+
     def test_disabled_and_incomplete_configuration_are_distinct(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -396,6 +416,7 @@ class DeepSeekFlashAdapterTests(unittest.TestCase):
             self.assertEqual(captured["timeout"], 5)
             self.assertEqual(captured["auth"], "Bearer secret")
             self.assertEqual(captured["body"]["response_format"], {"type": "json_object"})
+            self.assertEqual(captured["body"]["thinking"], {"type": "disabled"})
             self.assertEqual(captured["body"]["messages"][0], {"role": "system", "content": "system"})
 
     def test_timeout_is_reported_as_a_bounded_request_failure(self):

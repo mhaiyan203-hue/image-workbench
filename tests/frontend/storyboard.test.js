@@ -74,7 +74,7 @@ function shot(id, overrides = {}) {
 
 function harness({ boards, assets = [], taskResults = {}, makeReplanTask = null }) {
   const root = new MiniNode('main'); root.isConnected = true;
-  const ids = ['videoShotForm','videoShotName','videoShotPrompt','videoDuration','videoRatio','videoMode','videoReferenceChoices','videoResolution'];
+  const ids = ['pipelineStoryboardBody','videoShotForm','videoShotName','videoShotPrompt','videoDuration','videoRatio','videoMode','videoReferenceChoices','videoResolution'];
   const elements = new Map(ids.map(id => [id, new MiniNode(id === 'videoShotForm' ? 'form' : id === 'videoShotPrompt' ? 'textarea' : id === 'videoReferenceChoices' ? 'div' : id === 'videoDuration' ? 'input' : id === 'videoRatio' || id === 'videoMode' || id === 'videoResolution' ? 'select' : 'input')]));
   for (const [id, element] of elements) { element.id = id; root.append(element); }
   elements.get('videoDuration').value = '5'; elements.get('videoRatio').value = 'landscape'; elements.get('videoMode').value = 'T2V'; elements.get('videoResolution').value = '720p';
@@ -120,7 +120,7 @@ function harness({ boards, assets = [], taskResults = {}, makeReplanTask = null 
     if (method === 'POST' && url.endsWith('/video-draft')) return {};
     throw new Error(`Unexpected API request ${method} ${url}`);
   };
-  const context = vm.createContext({ window: { IWVideo: host }, document, sessionStorage: {
+  const context = vm.createContext({ location:{hash:''}, window: { IWVideo: host }, document, sessionStorage: {
     values: new Map(), getItem(key) { return this.values.get(key) ?? null; }, setItem(key, value) { this.values.set(key, String(value)); }, removeItem(key) { this.values.delete(key); },
   }, crypto: { randomUUID: () => `${Math.random().toString(16).slice(2).padEnd(32, '0')}` }, Event: class { constructor(type) { this.type = type; } },
   setTimeout: callback => { (contextTimers.push(callback)); return contextTimers.length; }, clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {}, });
@@ -251,7 +251,8 @@ test('video workflow selection maps ordered video asset IDs back to Storyboard A
     { artifact_id: 'artifact-b', video_asset_id: 'video-b', available: true },
   ];
   for (const scenario of [
-    { mode: 'I2V', shot: shot('s', { start_frame_artifact_id: 'artifact-a', end_frame_artifact_id: 'artifact-b' }), order: ['video-a','video-b'], expected: ['artifact-a','artifact-b'] },
+    { mode: 'I2V', shot: shot('s', { start_frame_artifact_id: 'artifact-a' }), order: ['video-a'], expected: ['artifact-a'] },
+    { mode: 'FL2V', shot: shot('s', { start_frame_artifact_id: 'artifact-a', end_frame_artifact_id: 'artifact-b' }), order: ['video-a','video-b'], expected: ['artifact-a','artifact-b'] },
     { mode: 'R2V', shot: shot('s', { reference_artifact_ids: ['artifact-b','artifact-a'] }), order: ['video-b','video-a'], expected: ['artifact-a','artifact-b'] },
     { mode: 'T2V', shot: shot('s'), order: [], expected: [] },
   ]) {
@@ -269,23 +270,45 @@ test('video workflow selection maps ordered video asset IDs back to Storyboard A
   }
 });
 
-test('T2V to I2V saves selected start and end Artifact IDs', async () => {
+test('T2V to first-frame or first-last-frame saves the matching Artifact IDs', async () => {
   const assets = [
     { artifact_id: 'artifact-a', video_asset_id: 'video-a', available: true },
     { artifact_id: 'artifact-b', video_asset_id: 'video-b', available: true },
   ];
-  const h = harness({ boards: [{ storyboard_id: 'board-a', version: 1, status: 'approved', shots: [shot('s')], target_duration_ms: 4000 }], assets });
-  await h.start(); const panel = find(h.root, item => item.className === 'storyboard-panel');
-  await byText(panel, '1. 镜头 s · 4s / 生成 5s').fire('click');
-  h.elements.get('videoMode').value = 'I2V'; h.host.state.referenceOrder = ['video-b','video-a'];
-  await h.elements.get('videoShotForm').fire('submit'); await tick();
-  const edit = h.calls.find(call => call.method === 'POST' && call.url.endsWith('/edit'));
-  assert.equal(edit?.body.changes.start_frame_artifact_id, 'artifact-b');
-  assert.equal(edit?.body.changes.end_frame_artifact_id, 'artifact-a');
-  assert.deepEqual(edit?.body.changes.reference_artifact_ids, []);
+  for (const mode of ['I2V','FL2V']) {
+    const h = harness({ boards: [{ storyboard_id: 'board-a', version: 1, status: 'approved', shots: [shot('s')], target_duration_ms: 4000 }], assets });
+    await h.start(); const panel = find(h.root, item => item.className === 'storyboard-panel');
+    await byText(panel, '1. 镜头 s · 4s / 生成 5s').fire('click');
+    h.elements.get('videoMode').value = mode; h.host.state.referenceOrder = mode === 'I2V' ? ['video-b'] : ['video-b','video-a'];
+    await h.elements.get('videoShotForm').fire('submit'); await tick();
+    const edit = h.calls.find(call => call.method === 'POST' && call.url.endsWith('/edit'));
+    assert.equal(edit?.body.changes.start_frame_artifact_id, 'artifact-b');
+    assert.equal(edit?.body.changes.end_frame_artifact_id, mode === 'I2V' ? '' : 'artifact-a');
+    assert.deepEqual(edit?.body.changes.reference_artifact_ids, []);
+  }
 });
 
-test('I2V to T2V clears both frame Artifact IDs and saves the version', async () => {
+test('frame modes reject mismatched reference counts before editing a bound storyboard', async () => {
+  const assets = [
+    { artifact_id: 'artifact-a', video_asset_id: 'video-a', available: true },
+    { artifact_id: 'artifact-b', video_asset_id: 'video-b', available: true },
+  ];
+  for (const [mode, refs, message] of [
+    ['I2V', [], '首帧模式需要选择 1 张'],
+    ['I2V', ['video-a','video-b'], '首帧模式需要选择 1 张'],
+    ['FL2V', ['video-a'], '首尾帧模式需要选择 2 张'],
+  ]) {
+    const h = harness({ boards: [{ storyboard_id: 'board-a', version: 1, status: 'approved', shots: [shot('s')], target_duration_ms: 4000 }], assets });
+    await h.start(); const panel = find(h.root, item => item.className === 'storyboard-panel');
+    await byText(panel, '1. 镜头 s · 4s / 生成 5s').fire('click');
+    h.elements.get('videoMode').value = mode; h.host.state.referenceOrder = refs;
+    await h.elements.get('videoShotForm').fire('submit'); await tick();
+    assert.ok(panel.querySelector('[role="status"]').textContent.includes(message));
+    assert.equal(h.calls.some(call => call.method === 'POST'), false);
+  }
+});
+
+test('FL2V to T2V clears both frame Artifact IDs and saves the version', async () => {
   const assets = [
     { artifact_id: 'artifact-a', video_asset_id: 'video-a', available: true },
     { artifact_id: 'artifact-b', video_asset_id: 'video-b', available: true },

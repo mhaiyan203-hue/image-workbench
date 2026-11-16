@@ -1,6 +1,7 @@
 """Boundary and failure checks for service-scoped filesystem capabilities."""
 import ctypes
 import errno
+import ntpath
 import os
 from pathlib import Path
 import tempfile
@@ -114,6 +115,31 @@ class ManagedFilesTests(unittest.TestCase):
                 self.assertEqual(self.files.read_json(path), record)
             self.assertEqual(len(attempts), 3)
         self.assertEqual(list(self.files.root.iterdir()), [path])
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended path prefixes")
+    def test_resolve_sharing_race_keeps_record_inside_its_scope(self):
+        path = self.files.path("record.json")
+        record = {"schema_version": 1, "value": "complete record"}
+        self.files.write_json(path, record)
+        original = ntpath._getfinalpathname
+        lookups = []
+
+        def racing_lookup(target):
+            if Path(target) == path:
+                lookups.append(target)
+                if len(lookups) == 2:
+                    raise windows_permission_error(32)
+            return original(target)
+
+        with patch.object(ntpath, "_getfinalpathname", racing_lookup):
+            self.assertEqual(self.files.read_json(path), record)
+        self.assertEqual(len(lookups), 2)
+
+        # An extended prefix must not make a resolved sibling path acceptable.
+        outside = Path("\\\\?\\" + str(self.root / "workspace-b" / "record.json"))
+        with patch.object(Path, "resolve", return_value=outside):
+            with self.assertRaisesRegex(ValueError, "超出授权目录"):
+                self.files.read_json(path)
 
     def test_read_permission_failure_is_bounded_and_other_errors_are_not_retried(self):
         path = self.files.path("record.json")

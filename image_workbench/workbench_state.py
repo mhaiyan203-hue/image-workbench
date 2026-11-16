@@ -21,6 +21,7 @@ from .domain_errors import ConflictError
 from .image_status import STATUS_LABELS, FAILURE_MESSAGES, _execution_timing, _seconds_between
 from .image_queries import ImageQueries
 from .image_references import task_input_artifacts
+from .image_prompting import default_image_skill
 
 
 PROMPT_SOURCE_KEYS = ("kind", "enhancement_id", "skill_id", "skill_version", "mode", "task_type")
@@ -46,7 +47,7 @@ def _prompt_source(value):
 
 class WorkbenchState:
     def __init__(self, storage: StorageManager, *, backend="codex", execution_mode="local"):
-        if backend not in {"codex", "local"}:
+        if backend not in {"codex", "local", "image-api"}:
             raise ValueError("未知后端")
         self.storage, self.runner, self.backend = storage, TaskRunner(storage), backend
         self.execution_mode = execution_mode
@@ -103,6 +104,9 @@ class WorkbenchState:
         if value and (value.get("project_id"), value.get("task_id")) != (project_id, task_id):
             raise ValueError("附加任务记录不匹配")
         return value
+
+    def image_style_catalog(self):
+        return default_image_skill().catalog()
 
     def get_job(self, project_id, task_id):
         value = self._read_optional(self._task_file("jobs", project_id, task_id))
@@ -183,7 +187,7 @@ class WorkbenchState:
             return existing
 
     def create_task(self, project_id, *, request_id, operation, prompt, aspect_ratio="auto", base_artifact_id=None, inputs=(),
-                    subproject_id=None, name=None, description="", reference_artifact_ids=(),
+                    subproject_id=None, name=None, description="", reference_artifact_ids=(), style_id=None,
                     original_prompt=None, prompt_source=None, commerce_suite=None):
         _validate_id(request_id)
         _text(prompt, "提示词")
@@ -225,6 +229,8 @@ class WorkbenchState:
         parts = [project_id, sub.subproject_id, name, description, operation, prompt, aspect_ratio, base_artifact_id, hashes]
         if reference_artifact_ids:
             parts.append(list(reference_artifact_ids))
+        if style_id:
+            parts.append({"style_id": style_id})
         if original_prompt is not None:
             parts.append(original_prompt)
         if prompt_source is not None:
@@ -240,11 +246,14 @@ class WorkbenchState:
                 if previous["state"] != "ready":
                     raise ConflictError("上次保存未完成，未启动模型；请建立新的草稿")
                 return self.storage.get_task(project_id, request_id)
+            image_prompt = default_image_skill().compile(
+                prompt, operation=operation, style_id=style_id, aspect_ratio=aspect_ratio,
+                reference_count=len(inputs) + len(reference_artifact_ids),
+            )
             options = {"schema_version": 1, "project_id": project_id, "task_id": request_id,
                        "fingerprint": fingerprint, "aspect_ratio": aspect_ratio, "state": "preparing", "created_at": _now(),
                        "reference_artifact_ids": list(reference_artifact_ids),
-                       "original_prompt": original_prompt, "prompt_source": prompt_source,
-                       "commerce_suite": commerce_suite}
+                       "image_prompt": image_prompt, "original_prompt": original_prompt, "prompt_source": prompt_source, "commerce_suite": commerce_suite}
             path = self._task_file("tasks", project_id, request_id, create=True)
             self.storage.files.write_json(path, options)
             try:
@@ -324,10 +333,10 @@ class WorkbenchState:
             return job
 
     def estimate_credit(self, project_id, task_id):
-        task = self.storage.get_task(project_id, task_id)
         suite = (self.task_options(project_id, task_id) or {}).get("commerce_suite")
         if suite:
             return suite["unit_credit"]
+        task = self.storage.get_task(project_id, task_id)
         references = len(task_input_artifacts(self.storage, project_id, task_id))
         return CreditCostCalculator.calculate(task.operation, self.backend, 1, references + bool(task.base_artifact_id))
 

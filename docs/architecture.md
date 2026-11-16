@@ -4,6 +4,8 @@
 模块按职责维护，通过服务接口协作。改一个功能前，可先运行该功能检查；发布前运行完整检查。
 架构检查、接口兼容检查和行为回归共同降低跨功能回归风险，不能保证任意修改都不影响其他功能。
 
+当前生成链路为图片 API、DeepSeek Flash 文本 API 与 SD2.0 视频 API。服务装配以 `composition.py` 为准，Provider 配置、进程布局及兼容后端见 [当前 API 流程](api_runtime.md)。下方 2026-10-20 架构审计保留当时的设计与验证背景。
+
 2026-10-20 后续治理审计见 [当前架构](architecture/CURRENT_ARCHITECTURE.md)、
 [模块职责](architecture/MODULE_MAP.md)、[依赖审计](architecture/DEPENDENCY_AUDIT.md)、
 [技术债](architecture/TECHNICAL_DEBT.md) 与 [七个开源项目研究](architecture/OPEN_SOURCE_ARCHITECTURE_RESEARCH.md)。
@@ -21,20 +23,21 @@
 | 图片任务接口、上传 | `http_api/tasks.py`、`http_api/uploads.py` | 保存不执行；上传临时文件必须清理；明确提交才冻结积分 |
 | 图片下载、审核 | `http_api/artifacts.py` | 校验所属空间、文件大小与哈希 |
 | 图片状态写入、提交 | `workbench_state.py` | 任务锁、请求去重、冻结与恢复 |
+| 图片默认 Skill 与风格 | `image_prompting.py`、`skills/image-generation-default/` | 只整理提示词与风格；通过现有任务执行，保留原始需求与快照，不调用额外模型或改动积分 |
 | 图片列表和详情 | `image_queries.py`、`image_status.py` | 查询投影、状态推导、计时口径；不启动任务 |
-| 脚本生成 | `script_service.py`、`script_models.py`、`script_templates.py` | 固定报价、版本不可覆盖、仅显式执行 |
+| 图片 API | `image_api_backend.py`、`task_runner.py` | Provider 只返回候选文件，TaskRunner 校验并归档，账本由应用服务管理 |
+| 脚本生成 | `script_service.py`、`script_api_models.py`、`deepseek_text.py`、`script_templates.py` | DeepSeek Flash API；固定报价、版本不可覆盖、仅显式执行 |
 | 脚本→分镜协调 | `script_workflow.py` | 通过公开源版本/规划阶段端口协作；脚本事务结束后触发，重启消费已保存意图 |
 | 统一恢复诊断 | `task_recovery.py` 及三种媒体的 recovery 接口 | 只读状态/失败/证据/动作；不调用模型、补偿任务或结算 |
 | 脚本插件与启停 | `plugin_api.py`、`script_plugin.py` | 显式注册；通过 ScriptServicePort 复用任务、积分、产物、版本；停用保留历史和恢复 |
 | 脚本素材与模板 | `script_resources.py`、`script_engine.py`、`script_resource_web.py` | 空间隔离、结构解析、上传内容作为数据 |
 | 分镜规划 | `storyboard_service.py`、`storyboard_models.py`、`storyboard_planner.py` | 独立规划服务，通过已有脚本/视频服务衔接 |
-| 视频任务 | `video_store.py`、`h3_worker.py`、`video_web.py` | 任务回执、计费、媒体限制；视频持久化由 VideoStore 维护 |
-| Qwen 测试 | `qwen_lab.py`、`qwen_worker.py`、`qwen_web.py` | 不导入 H3 实现，共享文件与异常工具从底层模块取得 |
+| 视频任务 | `video_store.py`、`online_video_planner.py`、`online_video_worker.py`、`video_web.py` | DeepSeek 规划后调用 SD2.0；任务回执、计费、媒体限制及持久化由 VideoStore 维护 |
 | 图片→脚本→视频联动 | `pipeline_service.py`、`video_pipeline.py` | HTTP 只解析输入；流程由服务编排，调用 VideoStore 的公开接口 |
 | 远程执行协议 | `remote_queue.py`、`script_remote.py`；`http_api/*_workers.py` | 队列实现不导入 FastAPI；断线只对账和回传，不自动重跑 |
 | 请求模型 | `contracts/` | 不导入业务实现或页面；保留现有字段与默认值 |
 | 通用异常、文件、媒体校验 | `domain_errors.py`、`managed_files.py`、`atomic_files.py`、`media_validation.py` | 文件端口限制目录并验证路径；调用者负责先核验 Workspace 与资源归属 |
-| Codex 运行环境 | `codex_runtime.py` | 图片与文本共同使用可执行文件定位、子进程环境与终止规则 |
+| 历史 Codex 运行环境 | `codex_runtime.py` | 仅供旧 Codex 后端定位程序、隔离与终止子进程；当前 API 主流程不依赖它 |
 | 管理检查、发布 | `admin_operations.py`、`admin_web.py`、`scripts/deploy_release.py` | 检查与发布包绑定同一源码；正式发布仍是独立操作 |
 
 表中未带目录的 Python 文件均位于 `image_workbench/`。脚本素材与分镜功能在同一目录由同期工作新增，
@@ -52,12 +55,12 @@ flowchart TD
     S --> I[账号与积分]
     P --> D[StorageManager]
     I --> D
-    S --> F[共享异常 / 文件 / 媒体 / Codex 运行环境]
+    S --> F[共享异常 / 文件 / 媒体 / Provider 适配]
     D --> F
 ```
 
 实际允许的导入关系以根目录 `architecture.json` 为准，图只表达主要方向。
-图片、脚本、视频、Qwen 不允许彼此直接导入实现；需要共享的能力下沉到稳定底层，
+图片、脚本、视频不允许彼此直接导入实现；需要共享的能力下沉到稳定底层，
 需要联动的流程通过注入的服务或端口组织。分镜属于跨脚本/视频的编排功能，单独声明依赖。
 
 `PipelineVideoPort` 明确列出联动流程需要的视频能力。`VideoStore.pipeline_project`、
@@ -83,6 +86,8 @@ flowchart TD
 
 沿用原生 `defer` 脚本，无需增加构建器。模板必须先加载组件再加载页面入口；
 页面资源版本包含上述全部组件文件，更新组件后刷新页面即可获取新版本。
+图片执行耗时以服务端返回值为基准，页面用单调时钟每秒更新文字；状态查询仍每 3 秒进行，
+收到响应后校准，排队、结束、状态待确认或切换任务时停止本地计时。最终耗时采用服务端记录。
 提示词强化服务只返回文本与技能来源；生成、积分和文件登记仍由既有任务链负责。
 现有图片查看、对比、脚本页、视频页和管理页仍有自己的独立文件。
 
@@ -112,7 +117,7 @@ flowchart TD
 ```
 
 可选功能为 `images`、`projects`、`accounts`、`scripts`、`storyboards`、`video`、
-`qwen`、`admin`、`storage`。修改共享底层、权限、计费、队列和恢复逻辑时运行完整回归。
+`admin`、`storage`。修改共享底层、权限、计费、队列和恢复逻辑时运行完整回归。
 
 检查包括：
 

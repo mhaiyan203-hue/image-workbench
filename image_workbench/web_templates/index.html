@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light">
   <title>Image Workbench — 图片生成与修改工作台</title>
   <link rel="stylesheet" href="/static/workbench.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/workbench-styles.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/accounts.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/vendor/photoswipe/photoswipe.css">
   <link rel="stylesheet" href="/static/image-viewer.css?v={{ asset_version }}">
@@ -22,8 +23,7 @@
       <div class="workspace-switcher"><label class="side-label" for="workspaceSelect">工作空间</label><select id="workspaceSelect" aria-label="切换工作空间"></select><div class="workspace-tools"><button id="newWorkspaceButton" class="text-button" type="button">＋ 新建空间</button><button id="deletedProjectsButton" class="text-button" type="button">回收站</button></div></div>
       <button class="nav-item active" type="button" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="10" width="8" height="11" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/></svg><span>工作台</span></button>
       <a class="nav-item video-nav-entry" href="/scripts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM15 3v5h4M9 12h7M9 16h7"/></svg><span>脚本与剧本</span></a>
-      <a class="nav-item video-nav-entry" href="/video"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 9 5-3v12l-5-3z"/></svg><span>H3 视频工作台</span></a>
-      <a class="nav-item video-nav-entry qwen-test-link" href="/qwen-test" hidden><span>Qwen 本地模型 · 测试版</span></a>
+      <a class="nav-item video-nav-entry" href="/video"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 9 5-3v12l-5-3z"/></svg><span>视频工作台</span></a>
       <a class="nav-item" href="/ecommerce"><span>电商套图 · 15 张五折</span></a>
       <div class="project-heading"><span class="side-label">项目</span><button id="newProjectButton" class="icon-button light-icon" type="button" aria-label="创建项目" title="创建项目">+</button></div>
       <div class="project-filter"><button id="archiveFilter" class="text-button" type="button">查看已归档项目</button></div>
@@ -45,7 +45,7 @@
 
       <div class="workspace-scroll">
         <section id="welcomeRow" class="welcome-row">
-          <div><div class="eyebrow"><span class="eyebrow-line"></span>创作空间</div><h1 id="pageHeading">把想法变成图像</h1><p>整理需求，点击后直接开始生成。</p></div>
+          <div><div class="eyebrow"><span class="eyebrow-line"></span>创作空间</div><h1 id="pageHeading">把想法变成图像</h1><p>整理需求，直接生成，或保存多个任务后批量创作。</p></div>
           <div class="welcome-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
         </section>
 
@@ -64,6 +64,12 @@
               <form id="taskForm" novalidate>
                 <div class="field-label-row"><label class="field-label" for="promptInput">创作需求</label><span id="promptCount" class="field-hint">0 / 4000</span></div>
                 <textarea id="promptInput" name="prompt" maxlength="4000" placeholder="例如：一间被晨光照亮的极简咖啡馆，木质桌面上放着一杯拿铁，柔和胶片质感……" required></textarea>
+                <div class="image-style-field">
+                  <div class="field-label-row"><label class="field-label" for="imageStyleSelect">视觉风格 <span class="optional">可选</span></label><button id="browseImageStyles" class="text-button" type="button">浏览效果与案例 →</button></div>
+                  <select id="imageStyleSelect" name="style_id"><option value="">遵循原始需求</option></select>
+                  <p id="imageStyleSummary" class="image-style-summary">生成时自动整理画面要求，保留你指定的内容、文字和参考约束。</p>
+                  <button id="undoStyleExample" class="text-button" type="button" hidden>撤销刚才的案例填入</button>
+                </div>
                 <div id="promptEnhancement" class="prompt-enhancement">
                   <div class="prompt-enhancement-head">
                     <div>
@@ -96,7 +102,7 @@
                   <fieldset class="operation-picker"><legend class="field-label">任务类型</legend><div class="segmented"><label><input type="radio" name="operation" value="generate" checked><span>生成图片</span></label><label><input type="radio" name="operation" value="edit"><span>修改图片</span></label></div></fieldset>
                   <div class="ratio-picker"><label class="field-label" for="ratioSelect">画面比例</label><select id="ratioSelect" name="aspect_ratio"><option value="auto">自动选择</option><option value="1:1">1:1 方形</option><option value="3:2">3:2 横向</option><option value="2:3">2:3 纵向</option></select></div>
                 </div>
-                <p class="ratio-note">比例通过提示词约束，实际尺寸以产物为准。</p>
+                <p class="ratio-note">{{ '图片 API 按所选比例请求尺寸；自动选择由模型决定。' if image_api_mode else '比例通过提示词约束，实际尺寸以产物为准。' }}</p>
                 <p id="editHelp" class="edit-help" hidden>可从项目历史选择任务，在结果预览中点击“修改图片”设为基底；也可以直接添加参考图片。</p>
                 <div id="baseImagePanel" class="base-image-panel" hidden><div class="field-label">基底图片</div><div id="baseImagePreview" class="base-image-preview"></div><button id="clearBaseImage" class="text-button" type="button">移除基底图片</button></div>
                 <div id="referenceUploadPanel" class="upload-panel">
@@ -104,13 +110,22 @@
                   <label class="dropzone" for="imageInput"><span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4"/></svg></span><span><strong>添加图片</strong><small>点击浏览或拖放到这里</small></span><span class="dropzone-limit">单张最大 20 MB</span><input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" multiple></label>
                   <p class="asset-input-help">可在此粘贴图片（Ctrl+V / Cmd+V）或拖拽上传。</p><button type="button" id="chooseProjectImages" class="text-button">选择项目已有图片</button><div id="filePreviewList" class="file-preview-list"></div>
                 </div>
-                <div class="form-footer"><span id="formMessage" class="form-message" role="status"></span><button id="saveTaskButton" class="primary-button" type="submit"><span>开始生成</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4"/></svg></button></div>
+                <div class="form-footer task-create-footer">
+                  <p class="create-action-hint">保存不消耗积分；开始生成会保存任务并提交执行。</p>
+                  <div class="task-create-actions"><button id="saveTaskButton" class="primary-button" type="submit">开始生成</button><button id="saveDraftTaskButton" class="secondary-button" type="submit">保存任务</button></div>
+                  <span id="formMessage" class="form-message" role="status"></span>
+                </div>
               </form>
             </section>
 
             <section class="panel history-panel">
               <div class="panel-heading history-heading"><div><span class="step-label">02 <span>·</span> 项目记录</span><h2>任务历史</h2></div><span id="taskCount" class="count-pill">0 个任务</span></div>
-              <div id="taskList" class="task-list"><div class="list-empty"><span class="empty-orbit">✳</span><strong>还没有任务</strong><span>提交任务后，它会出现在这里。</span></div></div>
+              <div id="batchToolbar" class="batch-toolbar">
+                <div class="batch-selection"><label class="batch-select-all"><input id="selectDraftTasks" type="checkbox">全选待生成</label><span id="batchSelectionSummary" class="batch-selection-summary" role="status">先保存任务，再选择批量生成</span></div>
+                <button id="batchGenerateButton" class="primary-button" type="button" disabled>批量生成 (0)</button>
+              </div>
+              <p id="batchMessage" class="batch-message" role="status" hidden></p>
+              <div id="taskList" class="task-list"><div class="list-empty"><span class="empty-orbit">✳</span><strong>还没有任务</strong><span>保存一个任务后，它会出现在这里。</span></div></div>
             </section>
           </div>
 
@@ -122,7 +137,7 @@
             </section>
           </aside>
         </section>
-        <footer class="page-footer"><span>Image Workbench</span><span>{{ '云端收取需求 · 本机生成图片' if remote_mode else '本地图片创作 · 安全保存' }}</span></footer>
+        <footer class="page-footer"><span>Image Workbench</span><span>{{ '图片 API 创作 · 历史版本保存' if image_api_mode else ('云端收取需求 · 本机生成图片' if remote_mode else '本地图片创作 · 安全保存') }}</span></footer>
       </div>
     </main>
   </div>
@@ -132,6 +147,26 @@
   <dialog id="moveTaskDialog" class="modal-dialog"><form id="moveTaskForm"><div class="dialog-top"><div><span class="eyebrow">移动任务</span><h2>选择目标子项目</h2></div><button class="icon-button close-move-dialog" type="button" aria-label="关闭">×</button></div><p id="moveTaskSummary" class="dialog-summary"></p><label class="field-label" for="moveTargetSelect">目标子项目</label><select id="moveTargetSelect" required></select><div class="dialog-footer"><button class="secondary-button close-move-dialog" type="button">取消</button><button class="primary-button" type="submit">移动任务</button></div></form></dialog>
   <dialog id="imageDialog" class="image-dialog" aria-labelledby="lightboxTitle"><div class="image-dialog-top"><div><strong id="lightboxTitle">图片预览</strong><span id="lightboxMeta"></span></div><button id="closeImageDialog" class="icon-button" type="button" aria-label="关闭图片预览">×</button></div><p id="lightboxStatus" role="status" hidden></p><img id="lightboxImage" alt="生成图片大图预览"><a id="lightboxDownload" class="download-button" href="#" download>下载图片</a></dialog>
   <dialog id="accountDialog" class="modal-dialog"><div class="dialog-top"><h2 id="accountDialogTitle"></h2><button id="closeAccountDialog" class="icon-button" aria-label="关闭" type="button">×</button></div><div id="accountDialogContent"></div></dialog>
+  <dialog id="imageStylesDialog" class="image-styles-dialog" aria-labelledby="imageStylesTitle">
+    <div class="image-styles-header"><div><span class="eyebrow">风格灵感</span><h2 id="imageStylesTitle">找到画面的感觉</h2><p>先看效果，再把风格用到你的需求中。</p></div><button id="closeImageStyles" class="icon-button" type="button" aria-label="关闭风格案例">×</button></div>
+    <p id="imageStylesStatus" class="image-styles-status" role="status"></p>
+    <button id="retryImageStyles" class="secondary-button" type="button" hidden>重新加载风格</button>
+    <div class="image-styles-body">
+      <div id="imageStyleCards" class="image-style-cards" aria-label="可选视觉风格"></div>
+      <section id="imageStyleDetail" class="image-style-detail" aria-label="风格案例详情" hidden>
+        <button id="backToImageStyles" class="text-button" type="button">← 返回风格列表</button>
+        <a id="imageStylePreviewLink" class="image-style-preview-link" href="#" target="_blank" rel="noopener" aria-label="打开完整风格效果图"><img id="imageStylePreview" alt="风格效果预览"><span>查看完整效果图 ↗</span></a>
+        <div class="image-style-detail-heading"><h3 id="imageStyleName"></h3><span id="imageStyleCategory"></span></div>
+        <p id="imageStyleDescription"></p><p class="image-style-preview-note">原创生成示例 · 用于参考视觉方向</p>
+        <button id="applyImageStyle" class="primary-button" type="button">应用此风格</button>
+        <label class="field-label" for="imageStyleExample">案例提示词</label><textarea id="imageStyleExample" readonly rows="6"></textarea>
+        <p id="imageStyleRatio" class="image-style-preview-note"></p>
+        <div class="image-style-actions"><button id="useImageStyleExample" class="secondary-button" type="button">使用案例</button><button id="copyImageStyleExample" class="text-button" type="button">复制提示词</button></div>
+        <p class="image-style-preview-note">应用风格保留你的需求；使用案例会填入示例需求和比例，可撤销。</p>
+        <div id="imageStyleSources" class="image-style-sources"></div>
+      </section>
+    </div>
+  </dialog>
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
   <script src="/static/image-viewer.js?v={{ asset_version }}" defer></script>
   <script src="/static/image-comparison.js?v={{ asset_version }}" defer></script>
@@ -142,6 +177,7 @@
   <script src="/static/workbench-prompt-enhancement.js?v={{ asset_version }}" defer></script>
   <script src="/static/workbench-preview.js?v={{ asset_version }}" defer></script>
   <script src="/static/workbench-accounts.js?v={{ asset_version }}" defer></script>
+  <script src="/static/workbench-styles.js?v={{ asset_version }}" defer></script>
   <script src="/static/workbench.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

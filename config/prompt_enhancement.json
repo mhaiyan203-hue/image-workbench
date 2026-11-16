@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provider": "mock",
+  "provider": "deepseek_flash",
   "skills_root": "skills/prompt-enhancement/skills",
   "styles_root": "skills/image-asset-generation/styles",
   "limits": {

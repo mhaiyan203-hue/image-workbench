@@ -114,7 +114,7 @@ class DemandRouter:
         except FlashConfigError as exc:
             if exc.reason == "disabled":
                 raise ValueError("需求尚不明确，且 DeepSeek Flash 未配置；请补充需求或手动选择模型") from exc
-            raise ValueError("DeepSeek Flash 配置不完整；请手动选择模型") from exc
+            raise ValueError("DeepSeek Flash 未配置完整；请手动选择模型") from exc
         except FlashRequestError as exc:
             raise ValueError("需求分析服务暂不可用；请补充需求或手动选择模型") from exc
         try:
@@ -126,6 +126,9 @@ class DemandRouter:
         if request.get("selection_mode", "recommended") == "manual":
             choice = self.registry.resolve(request.get("model_id"), request.get("thinking_level"), request["generation_type"])
             return choice, "使用用户明确选择", None
+        fixed = _json(self.registry.root / "script_routing.json").get("fixed_model")
+        if fixed:
+            return self.registry.resolve(*fixed, request["generation_type"]), "使用 DeepSeek Flash 与预设创作 Skill", None
         if template.get("default_model_id") and template.get("default_thinking_level"):
             choice = self.registry.resolve(template["default_model_id"], template["default_thinking_level"], request["generation_type"])
             return choice, "使用模板默认模型与思考强度", None

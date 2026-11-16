@@ -28,7 +28,17 @@ class AssetTrayBrowserTests(unittest.TestCase):
     stop_server = asset_helpers.AssetBrowserTests.stop_server
     post = asset_helpers.AssetBrowserTests.post
     get = asset_helpers.AssetBrowserTests.get
-    video = asset_helpers.AssetBrowserTests.video
+    def video(self):
+        asset_helpers.AssetBrowserTests.video(self)
+        # Retained tray APIs/actions have compatibility coverage in this fixture.
+        # The normal workbench hides these panels; current UX is tested separately.
+        expect(self.page.locator('#assetTray')).to_be_hidden()
+        expect(self.page.locator('#videoAssetGrid')).to_be_hidden()
+        self.page.evaluate("""() => {
+            document.getElementById('assetTray').hidden = false;
+            document.getElementById('assetTray').open = true;
+            document.getElementById('videoAssetGrid').hidden = false;
+        }""")
     root_page = asset_helpers.AssetBrowserTests.root_page
     files = asset_helpers.AssetBrowserTests.files
     event = asset_helpers.AssetBrowserTests.event
@@ -173,10 +183,67 @@ class AssetTrayBrowserTests(unittest.TestCase):
         chosen = [red["asset_id"], blue["asset_id"]]
         self.page.wait_for_function("(ids) => JSON.stringify(window.IWVideo.snapshot().referenceOrder)===JSON.stringify(ids)",
                                     arg=chosen)
+        expect(self.page.locator("#videoMode")).to_have_value("FL2V")
+        expect(self.page.locator(".video-reference-order").filter(has_text="尾帧")).to_have_count(1)
         self.menu(self.tray(green["asset_id"]), "设为首帧")
         expect(self.page.locator("#videoNotice")).to_contain_text("已有图片不会覆盖")
         self.assertEqual(self.page.evaluate("() => window.IWVideo.snapshot().referenceOrder"), chosen)
         expect(self.page.locator("#videoReferenceChoices input:checked")).to_have_count(2)
+
+    def test_frame_modes_validate_counts_and_save_existing_i2v_contract(self):
+        red, blue = self.upload_images("red", "blue")
+        self.video()
+        self.page.locator('[data-pipeline-step="video"]').click()
+        mode = self.page.locator("#videoMode")
+        self.assertEqual(mode.locator("option").all_text_contents(),
+                         ["参考素材生视频", "首帧生视频", "首尾帧生视频", "文生视频"])
+        first = self.page.locator(f'#videoReferenceChoices input[value="{blue["asset_id"]}"]')
+        last = self.page.locator(f'#videoReferenceChoices input[value="{red["asset_id"]}"]')
+        name = self.page.locator("#videoShotName")
+        prompt = self.page.locator("#videoShotPrompt")
+        save = self.page.locator('#videoShotForm button[type="submit"]')
+        mode.select_option("I2V")
+        name.fill("只有首帧")
+        prompt.fill("画面中的主体缓慢向前移动")
+        save.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("首帧模式需要选择 1 张")
+        self.assertEqual(self.get(f"/api/video/projects/{self.pid}")["shots"], [])
+        self.menu(self.tray(blue["asset_id"]), "设为首帧")
+        expect(first).to_be_checked()
+        save.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("分镜已保存")
+        shots = self.get(f"/api/video/projects/{self.pid}")["shots"]
+        self.assertEqual((shots[0]["mode"], shots[0]["reference_ids"]), ("I2V", [blue["asset_id"]]))
+        expect(self.page.locator(".video-shot-meta")).to_contain_text("首帧生视频")
+
+        name.fill("从首帧到尾帧")
+        prompt.fill("从蓝色画面平稳过渡到红色画面")
+        mode.select_option("FL2V")
+        save.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("首尾帧模式需要选择 2 张")
+        self.assertEqual(len(self.get(f"/api/video/projects/{self.pid}")["shots"]), 1)
+        self.menu(self.tray(red["asset_id"]), "设为尾帧")
+        expect(last).to_be_checked()
+        mode.select_option("I2V")
+        expect(self.page.locator("#videoReferenceChoices input:checked")).to_have_count(2)
+        save.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("首帧模式需要选择 1 张")
+        expect(self.page.locator(".video-reference-order").filter(has_text="多余参考图")).to_have_count(1)
+        self.assertEqual(len(self.get(f"/api/video/projects/{self.pid}")["shots"]), 1)
+        mode.select_option("FL2V")
+        expect(first.locator("..").locator(".video-reference-order")).to_have_text("首帧")
+        expect(last.locator("..").locator(".video-reference-order")).to_have_text("尾帧")
+        save.click()
+        expect(self.page.locator("#videoNotice")).to_contain_text("分镜已保存")
+        shots = self.get(f"/api/video/projects/{self.pid}")["shots"]
+        self.assertEqual(len(shots), 2)
+        shot = next(item for item in shots if item["name"] == "从首帧到尾帧")
+        self.assertEqual((shot["mode"], shot["reference_ids"]),
+                         ("I2V", [blue["asset_id"], red["asset_id"]]))
+        self.page.reload()
+        expect(self.page.locator(".video-shot-meta").filter(has_text="首帧生视频")).to_have_count(1)
+        expect(self.page.locator(".video-shot-meta").filter(has_text="首尾帧生视频")).to_have_count(1)
+        self.assertTrue(all(item["status"] == "draft" for item in shots))
 
     def test_generated_result_and_gallery_continue_edit_keep_scope_and_base(self):
         _, artifact = self.output_image()

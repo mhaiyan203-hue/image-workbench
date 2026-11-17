@@ -86,6 +86,7 @@
     let session = null;
     let applied = null;
     let pending = false;
+    let revision = 0;
 
     function currentMode() {
       const checked = modeInputs.find(input => input.checked);
@@ -101,7 +102,8 @@
     function setPending(value) {
       pending = value;
       trigger.disabled = value;
-      trigger.textContent = value ? '正在强化…' : 'AI 强化';
+      trigger.setAttribute('aria-label', value ? '正在增强提示词' : '增强提示词');
+      trigger.setAttribute('title', value ? '正在增强提示词…' : '增强提示词');
       trigger.setAttribute('aria-busy', String(value));
       modeInputs.forEach(input => { input.disabled = value; });
       if (session) {
@@ -143,12 +145,14 @@
       meta.textContent = notes.join(' ');
       showPanel();
       if (failed) notify((fallback && fallback.message) || '强化未完成，已保留原文。', true);
-      else notify('提示词强化完成；点击“使用强化版”后才会更新创作需求。');
+
     }
 
     async function runEnhancement() {
       if (pending) return;
       const context = getContext() || {};
+      const requestRevision = ++revision;
+      const contextKey = JSON.stringify(context);
       const built = buildRequest({
         requestId: requestId(),
         prompt: context.prompt,
@@ -168,14 +172,20 @@
       setStatus('正在强化提示词，请稍候…');
       try {
         const response = await enhance(built.payload);
+        if (requestRevision !== revision) return;
         render(response);
+        setPending(false);
+        if (response.status === 'enhanced') {
+          if (JSON.stringify(getContext() || {}) === contextKey) applyResult();
+          else setStatus('输入内容已变化，未覆盖当前内容；可查看增强详情后选择使用。', 'warning');
+        }
       } catch (error) {
+        if (requestRevision !== revision) return;
         setStatus(error && error.message ? error.message : '提示词强化失败，请重试。', 'error');
         showPanel();
         notify(error && error.message ? error.message : '提示词强化失败，请重试。', true);
       } finally {
-        setPending(false);
-        showPanel();
+        if (requestRevision === revision) { setPending(false); showPanel(); }
       }
     }
 
@@ -220,6 +230,7 @@
     }
 
     function reset() {
+      revision += 1;
       session = null;
       applied = null;
       pending = false;
@@ -229,7 +240,8 @@
       meta.textContent = '';
       setStatus('');
       trigger.disabled = false;
-      trigger.textContent = 'AI 强化';
+      trigger.setAttribute('aria-label', '增强提示词');
+      trigger.setAttribute('title', '增强提示词');
       trigger.setAttribute('aria-busy', 'false');
       modeInputs.forEach(input => { input.disabled = false; });
       applyButton.disabled = false;

@@ -353,7 +353,6 @@ test('prompt enhancement applies only editable text and never triggers generatio
   assert.equal(harness.original.textContent, '一间咖啡馆');
   assert.equal(harness.output.value, '一间被晨光照亮的咖啡馆');
   assert.equal(harness.apply.disabled, false);
-  harness.apply.handlers.click();
   assert.deepEqual(harness.applied, ['一间被晨光照亮的咖啡馆']);
   assert.equal(harness.calls.length, 1, 'using the enhanced text must not call the model or submit a task');
   assert.match(harness.status.textContent, /点击“开始生成”后才会生成/);
@@ -394,8 +393,7 @@ test('prompt enhancement records original text and source only for applied enhan
   const harness = promptEnhancementHarness(response);
   assert.equal(harness.handle.snapshot(), null);
   await harness.trigger.handlers.click();
-  assert.equal(harness.handle.snapshot(), null, 'viewing a result does not attribute the task');
-  harness.apply.handlers.click();
+  assert.equal(harness.applied.length, 1, 'successful enhancement fills the input immediately');
   assert.deepEqual(JSON.parse(JSON.stringify(harness.handle.snapshot())), {
     original_prompt: '一间咖啡馆',
     prompt_source: source,
@@ -416,4 +414,25 @@ test('prompt enhancement refuses locally before any network call for an edit wit
   await harness.trigger.handlers.click();
   assert.equal(harness.calls.length, 0);
   assert.match(harness.status.textContent, /基底图片/);
+});
+
+
+test('enhancement does not overwrite edits made while waiting or revive a reset form', async () => {
+  for (const reset of [false, true]) {
+    let finish;
+    const response = new Promise(resolve => { finish = resolve; });
+    const context = { prompt: '原始需求' };
+    const harness = promptEnhancementHarness(response, context);
+    const running = harness.trigger.handlers.click();
+    assert.equal(harness.trigger.disabled, true);
+    if (reset) harness.handle.reset();
+    else context.prompt = '等待时新写的需求';
+    finish({status: 'enhanced', original_prompt: '原始需求', enhanced_prompt: '增强后的需求',
+      mode: 'standard', task_type: 'generate', usage: {}, warnings: []});
+    await running;
+    assert.deepEqual(harness.applied, []);
+    assert.equal(harness.trigger.disabled, false);
+    if (reset) assert.equal(harness.panel.hidden, true);
+    else assert.match(harness.status.textContent, /未覆盖/);
+  }
 });
